@@ -36,15 +36,17 @@ pub(super) struct PowerUserInputs {
 }
 
 pub(super) fn action_library(
-    slot: ActionRingSlot,
-    current: Option<&ActionRingEntry>,
+    (slot, current): (ActionRingSlot, Option<&ActionRingEntry>),
+    search: Option<(&Entity<InputState>, &str)>,
     application_input: &Entity<InputState>,
     shortcut_input: &Entity<InputState>,
     power_user: &PowerUserInputs,
     library_scroll: &ScrollHandle,
     pal: Palette,
 ) -> impl IntoElement {
-    let current_action = current.map(ActionRingEntry::action).cloned();
+    let query = search.map_or("", |(_, query)| query).trim().to_lowercase();
+    let catalog = matching_actions(&query);
+    let current_action = current.and_then(ActionRingEntry::action).cloned();
     let current_label = current_action
         .as_ref()
         .map_or_else(|| tr!("action_ring.empty_slot"), localized_action_label);
@@ -86,10 +88,15 @@ pub(super) fn action_library(
                         .child(current_label),
                 ),
         )
+        .when_some(search, |editor, (input, _)| {
+            editor.child(div().px_3().py_2().child(control_input(input)))
+        })
         .child(action_rows_scroller(
             v_flex()
                 .p_1p5()
                 .pb(px(LIBRARY_FADE_H))
+                .when(query.is_empty(), |library| {
+                    library
                 .when_some(current_action.as_ref(), |library, action| {
                     library.child(icon_editor(
                         slot,
@@ -123,7 +130,12 @@ pub(super) fn action_library(
                     &power_user.shell_command,
                     pal,
                 ))
-                .children(action_sections(slot, current_action.as_ref(), pal)),
+                })
+                .when(catalog.is_empty(), |library| {
+                    library.child(div().px_2().py_2().text_caption()
+                        .text_color(pal.text_muted).child(tr!("actions.no_actions_found")))
+                })
+                .children(action_sections(slot, current_action.as_ref(), catalog, pal)),
             library_scroll,
             pal,
         ))
@@ -361,10 +373,10 @@ fn power_user_action(kind: PowerUserKind, text: String) -> Option<Action> {
 fn action_sections(
     slot: ActionRingSlot,
     current: Option<&Action>,
+    catalog: Vec<(Category, Vec<Action>)>,
     pal: Palette,
 ) -> impl Iterator<Item = impl IntoElement> {
-    let mut index = 0usize;
-    ring_catalog().into_iter().map(move |(category, actions)| {
+    catalog.into_iter().map(move |(category, actions)| {
         v_flex()
             .child(editor_section(
                 rust_i18n::t!(category.translation_key()),
@@ -375,9 +387,8 @@ fn action_sections(
                 let action_to_commit = action.clone();
                 let label = localized_action_label(&action);
                 let icon_path = action_icon_path(&action);
-                let row_index = index;
-                index += 1;
-                MenuRow::new(("ring-action", row_index))
+                let id: gpui::SharedString = format!("ring-action-{}", action.label()).into();
+                MenuRow::new(id)
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .selected(selected)
@@ -406,6 +417,25 @@ fn action_sections(
                     })
             }))
     })
+}
+
+fn matching_actions(query: &str) -> Vec<(Category, Vec<Action>)> {
+    let terms: Vec<_> = query.split_whitespace().collect();
+    let mut sections = ring_catalog();
+    sections.retain_mut(|(category, actions)| {
+        let category_label = rust_i18n::t!(category.translation_key());
+        actions.retain(|action| {
+            let label = format!(
+                "{} {} {category_label}",
+                localized_action_label(action),
+                action.label()
+            )
+            .to_lowercase();
+            terms.iter().all(|term| label.contains(term))
+        });
+        !actions.is_empty()
+    });
+    sections
 }
 
 fn ring_catalog() -> Vec<(Category, Vec<Action>)> {
@@ -464,8 +494,8 @@ mod tests {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let cut = RingAction::new(Action::Cut).expect("Cut is a ring action");
             h_flex().w(px(640.0)).items_start().child(action_library(
-                ActionRingSlot::Top,
-                Some(&ActionRingEntry::new(cut)),
+                (ActionRingSlot::Top, Some(&ActionRingEntry::new(cut))),
+                None,
                 &self.application,
                 &self.shortcut,
                 &self.power_user,
@@ -622,6 +652,24 @@ mod tests {
         cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(library_scroll.offset().y < px(0.0), "the library scrolls");
         assert_eq!(cx.debug_bounds("ring-custom-shortcut"), Some(shortcut));
+    }
+
+    #[test]
+    fn action_search_matches_every_term_and_removes_empty_sections() {
+        let results = matching_actions("volume up");
+        assert!(
+            results
+                .iter()
+                .flat_map(|(_, actions)| actions)
+                .any(|action| *action == Action::VolumeUp)
+        );
+        assert!(
+            results
+                .iter()
+                .flat_map(|(_, actions)| actions)
+                .all(|action| *action != Action::VolumeDown)
+        );
+        assert!(matching_actions("no-such-ring-action").is_empty());
     }
 
     #[test]

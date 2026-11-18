@@ -135,7 +135,7 @@ fn main() {
         // not put an icon in the menu bar only to vanish seconds later. A
         // dropped sender means the core exited without arming — fall through
         // and let the process end.
-        let (armed_tx, armed_rx) = std::sync::mpsc::channel::<()>();
+        let (armed_tx, armed_rx) = std::sync::mpsc::channel();
         if let Err(e) = std::thread::Builder::new()
             .name("openlogi-agent-core".into())
             .spawn(move || {
@@ -145,8 +145,14 @@ fn main() {
             warn!(error = %e, "could not spawn the agent core thread; exiting");
             return;
         }
-        if armed_rx.recv().is_ok() {
-            tray::run_app_loop(show_in_menu_bar, app_icon, device_io_signal, shutdown_tx);
+        if let Ok(observable) = armed_rx.recv() {
+            tray::run_app_loop(
+                show_in_menu_bar,
+                app_icon,
+                device_io_signal,
+                shutdown_tx,
+                observable,
+            );
         }
     }
     #[cfg(not(target_os = "macos"))]

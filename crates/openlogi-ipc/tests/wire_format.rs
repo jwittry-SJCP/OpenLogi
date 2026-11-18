@@ -119,7 +119,7 @@ fn representative_smartshift_status() -> SmartShiftStatus {
 /// unreleased version and leave this pin alone (`crates/openlogi-ipc/AGENTS.md`).
 #[test]
 fn protocol_version_is_pinned() {
-    assert_eq!(PROTOCOL_VERSION, 45);
+    assert_eq!(PROTOCOL_VERSION, 47);
 }
 
 #[test]
@@ -521,13 +521,15 @@ fn action_ring_types() {
                     label: "Cut".to_string(),
                     literal: false,
                     icon: ActionRingIcon::Keyboard,
+                    opens_folder: false,
                 },
             )]),
             language: Some("fr".to_string()),
             size: ActionRingSize::Large,
+            flyout: Some(ActionRingSlot::TopRight),
         },
-        // The size is one trailing byte after the locale.
-        "2a01000343757400070102667202",
+        // Size and the optional flyout anchor follow the locale.
+        "2a01000343757400070001026672020101",
     );
     // The literal flag is one byte between label and icon.
     assert_wire(
@@ -535,8 +537,9 @@ fn action_ring_types() {
             label: "Cut".to_string(),
             literal: true,
             icon: ActionRingIcon::Keyboard,
+            opens_folder: true,
         },
-        "034375740107",
+        "03437574010701",
     );
     assert_wire(&ActionRingSize::Small, "00");
     assert_wire(&ActionRingSize::Large, "02");

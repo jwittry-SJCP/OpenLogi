@@ -243,7 +243,10 @@ fn an_unsaved_action_ring_profile_inherits_default_until_its_first_edit() {
         ring.default, inherited,
         "the default layout stays unchanged"
     );
-    assert_eq!(safari.slots[&ActionRingSlot::Top].action(), &Action::NewTab);
+    assert_eq!(
+        safari.slots[&ActionRingSlot::Top].action(),
+        Some(&Action::NewTab)
+    );
     assert_eq!(
         safari.slots[&ActionRingSlot::Bottom],
         inherited.slots[&ActionRingSlot::Bottom],

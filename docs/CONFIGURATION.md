@@ -44,7 +44,7 @@ header before parsing its fields. A v9 file without the policy still loads.
 
 ## Shape
 
-`schema_version` is required and currently `10`. `selected_device` is an
+`schema_version` is required and currently `13`. `selected_device` is an
 optional physical device key.
 
 `[app_settings]` contains application-wide preferences:
@@ -551,6 +551,22 @@ turning it on leaves gesture mode with the gesture map's `Click` as the press,
 and turning gestures back on restores the saved directions. The setting is per
 device, not per application: an app profile that gives the button its own
 action replaces the wheel hold in that application.
+
+Drag a filled slot onto another slot in the Actions Ring editor to move it.
+Dropping onto an occupied slot swaps the two entries. An empty slot can be
+assigned a folder with a separate ring of shortcuts. Select a folder in the
+editor to open or rename it, then use **Back to Parent Ring** to return.
+Selecting a folder in the on-screen ring opens its contents. A folder with up
+to four actions can use a compact flyout, selected on its parent slot or by
+adding `flyout = true` next to `folder`. Larger folders open a full ring.
+**Add Volume Controls** creates a flyout with volume up, mute, and volume down.
+Use **Search actions** to filter the available shortcuts by name or category.
+
+Schema 12 adds ring folders and the optional `haptic_strength` setting.
+Existing layouts load unchanged. Set `haptic_strength` under a device's
+`action_ring` table to set device-wide haptic strength. On MX Master 4 the
+choices are Off, Subtle, Low, Medium, and High. Saved slider values map to the
+closest level. Schema 13 adds the optional folder flyout setting.
 
 An Actions Ring entry wraps the action and may add an icon or literal label:
 

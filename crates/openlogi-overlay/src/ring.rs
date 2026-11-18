@@ -222,6 +222,47 @@ fn aimed_slot(
         .then_some(aimed)
 }
 
+/// Put up to four child actions in a shallow arc beside the cursor. The
+/// visible bubbles and their hit areas share the same centres.
+fn flyout_centres(
+    anchor: ActionRingSlot,
+    filled: &[ActionRingSlot],
+    geometry: Geometry,
+) -> impl Iterator<Item = (ActionRingSlot, f32, f32)> + '_ {
+    let index_positions = [0.0_f32, 1.0, 2.0, 3.0];
+    let midpoints = [0.0, 0.0, 0.5, 1.0, 1.5];
+    let midpoint = midpoints.get(filled.len()).copied().unwrap_or(1.5);
+    let (anchor_x, _) = anchor.unit_offset();
+    let side = if anchor_x < 0.0 { -1.0 } else { 1.0 };
+    filled
+        .iter()
+        .copied()
+        .zip(index_positions)
+        .map(move |(slot, index)| {
+            let row = index - midpoint;
+            let x = side * (geometry.radius + geometry.slot * (0.56 - row.abs() * 0.16));
+            let y = row * (geometry.selected_slot + 7.0);
+            (slot, x, y)
+        })
+}
+
+fn target_slot(
+    filled: &[ActionRingSlot],
+    flyout: Option<ActionRingSlot>,
+    geometry: Geometry,
+    x: f32,
+    y: f32,
+) -> Option<ActionRingSlot> {
+    flyout.map_or_else(
+        || aimed_slot(filled.iter().copied(), geometry, x, y),
+        |anchor| {
+            flyout_centres(anchor, filled, geometry)
+                .find(|&(_, cx, cy)| (x - cx).hypot(y - cy) <= geometry.selected_slot / 2.0 + 2.0)
+                .map(|(slot, _, _)| slot)
+        },
+    )
+}
+
 /// Corners of the beam from the centre to a highlighted `slot`, in panel
 /// coordinates: the centre, the two points where its sides touch the grown
 /// slot, and the slot's own centre, which the slot covers.
@@ -319,6 +360,29 @@ struct LabelPlace {
 }
 
 impl LabelPlace {
+    fn beside_flyout(x: f32, y: f32, geometry: Geometry) -> Self {
+        let centre = geometry.window / 2.0;
+        let towards_ring = if x > 0.0 { Grow::Before } else { Grow::After };
+        let inner_edge = centre + x - x.signum() * (geometry.selected_slot / 2.0 + LABEL_GAP);
+        let width = LABEL_MAX_WIDTH.min(if x > 0.0 {
+            inner_edge - LABEL_EDGE
+        } else {
+            geometry.window - inner_edge - LABEL_EDGE
+        });
+        Self {
+            left: if x > 0.0 {
+                inner_edge - width
+            } else {
+                inner_edge
+            },
+            top: (centre + y - LABEL_MAX_HEIGHT / 2.0)
+                .clamp(LABEL_EDGE, geometry.window - LABEL_MAX_HEIGHT - LABEL_EDGE),
+            width,
+            horizontal: towards_ring,
+            vertical: Grow::Centred,
+        }
+    }
+
     fn of(slot: ActionRingSlot, geometry: Geometry) -> Self {
         let centre = geometry.window / 2.0;
         let (x, y) = slot.unit_offset();
@@ -468,6 +532,12 @@ impl RingView {
         self.invocation.session_id
     }
 
+    /// Update an open ring in place when its folder page changes.
+    pub(crate) fn replace_page(&mut self, invocation: ActionRingInvocation) {
+        self.invocation = invocation;
+        self.hovered = None;
+    }
+
     /// Report this ring cancelled. The window is closed by the caller, which
     /// is the only one holding the handle.
     pub(crate) fn cancel(&self) {
@@ -496,7 +566,12 @@ impl RingView {
         Geometry::of(self.invocation.size)
     }
 
-    fn slot_element(&self, slot: ActionRingSlot, colors: RingColors) -> Option<gpui::AnyElement> {
+    fn slot_element(
+        &self,
+        slot: ActionRingSlot,
+        compact_centre: Option<(f32, f32)>,
+        colors: RingColors,
+    ) -> Option<gpui::AnyElement> {
         let presentation = self.invocation.slots.get(&slot)?;
         let icon_path = presentation.icon.asset_path();
         let selected = self.hovered == Some(slot);
@@ -511,7 +586,13 @@ impl RingView {
             (geometry.slot, geometry.glyph, colors.glyph)
         };
         // A hovered slot grows around the centre it rests on.
-        let (left, top) = slot.placement(geometry.window, geometry.radius, size);
+        let (left, top) = compact_centre.map_or_else(
+            || slot.placement(geometry.window, geometry.radius, size),
+            |(x, y)| {
+                let origin = (geometry.window - size) / 2.0;
+                (origin + x, origin + y)
+            },
+        );
         Some(
             div()
                 .absolute()
@@ -560,6 +641,8 @@ impl RingView {
             // collide with a known key ("Copy" → "Copier" under fr).
             let label = if presentation.literal {
                 presentation.label.clone()
+            } else if presentation.opens_folder {
+                rust_i18n::t!("action_ring.folder").into_owned()
             } else if let Some(key) = Action::translation_key_for_label(&presentation.label) {
                 rust_i18n::t!(key).into_owned()
             } else {
@@ -567,9 +650,21 @@ impl RingView {
             };
             Some((slot, SharedString::from(label)))
         });
-        let slots = ActionRingSlot::ALL
+        let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+        let flyout = self.invocation.flyout;
+        let compact: Vec<_> = flyout
             .into_iter()
-            .filter_map(|slot| self.slot_element(slot, colors))
+            .flat_map(|anchor| flyout_centres(anchor, &filled, geometry))
+            .collect();
+        let centre = |slot| {
+            compact
+                .iter()
+                .find_map(|&(key, x, y)| (key == slot).then_some((x, y)))
+        };
+        let slots = filled
+            .iter()
+            .copied()
+            .filter_map(|slot| self.slot_element(slot, centre(slot), colors))
             .collect::<Vec<_>>();
 
         div()
@@ -584,7 +679,7 @@ impl RingView {
                     .rounded_full()
                     .bg(FOOTPRINT_FILL),
             )
-            .when_some(self.hovered, |ring, slot| {
+            .when_some(self.hovered.filter(|_| flyout.is_none()), |ring, slot| {
                 ring.child(beam_element(slot, geometry))
             })
             .children(slots)
@@ -615,7 +710,10 @@ impl RingView {
             )
             .when_some(hovered_label, |ring, (slot, label)| {
                 ring.child(label_element(
-                    LabelPlace::of(slot, geometry),
+                    centre(slot).map_or_else(
+                        || LabelPlace::of(slot, geometry),
+                        |(x, y)| LabelPlace::beside_flyout(x, y, geometry),
+                    ),
                     label,
                     geometry,
                 ))
@@ -772,7 +870,14 @@ impl Render for RingView {
                     .child(self.panel(colors))
             });
         let click_pointer = self.pointer.clone();
+        let folders: Vec<_> = self
+            .invocation
+            .slots
+            .iter()
+            .filter_map(|(&slot, entry)| entry.opens_folder.then_some(slot))
+            .collect();
         let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+        let flyout = self.invocation.flyout;
 
         div()
             .id("ring-root")
@@ -797,7 +902,8 @@ impl Render for RingView {
                 ) else {
                     return;
                 };
-                let aimed = aimed_slot(this.invocation.slots.keys().copied(), geometry, x, y);
+                let filled: Vec<_> = this.invocation.slots.keys().copied().collect();
+                let aimed = target_slot(&filled, this.invocation.flyout, geometry, x, y);
                 if this.hover(aimed) {
                     cx.notify();
                 }
@@ -813,13 +919,15 @@ impl Render for RingView {
                     window,
                     event.position(),
                 )
-                .and_then(|(x, y)| aimed_slot(filled.iter().copied(), geometry, x, y));
+                .and_then(|(x, y)| target_slot(&filled, flyout, geometry, x, y));
                 let command = match aimed {
                     Some(slot) => OverlayCommand::Activate { session_id, slot },
                     None => OverlayCommand::Cancel { session_id },
                 };
                 let _ = root_commands.send(command);
-                session::dismiss_from_window(cx, window, session_id);
+                if aimed.is_none_or(|slot| !folders.contains(&slot)) {
+                    session::dismiss_from_window(cx, window, session_id);
+                }
             })
     }
 }
@@ -1037,6 +1145,28 @@ mod tests {
         assert_eq!(pointer.center_in(below), Some(point(px(10.0), px(20.0))));
     }
 
+    #[test]
+    fn flyout_bubbles_and_pointer_targets_share_centres_on_both_sides() {
+        let keys = [
+            ActionRingSlot::Top,
+            ActionRingSlot::TopRight,
+            ActionRingSlot::Right,
+            ActionRingSlot::Bottom,
+        ];
+        for size in ActionRingSize::ALL {
+            let geometry = Geometry::of(size);
+            for (anchor, direction) in [(ActionRingSlot::Left, -1.0), (ActionRingSlot::Right, 1.0)]
+            {
+                for (slot, x, y) in flyout_centres(anchor, &keys, geometry) {
+                    assert!(x * direction > 0.0 && x.abs() < geometry.window / 2.0);
+                    assert!(y.abs() + geometry.selected_slot / 2.0 < geometry.window / 2.0);
+                    assert_eq!(target_slot(&keys, Some(anchor), geometry, x, y), Some(slot));
+                }
+                assert_eq!(target_slot(&keys, Some(anchor), geometry, 0.0, 0.0), None);
+            }
+        }
+    }
+
     fn invocation() -> ActionRingInvocation {
         sized_invocation(ActionRingSize::Medium)
     }
@@ -1050,11 +1180,13 @@ mod tests {
                     label: "Copy".to_string(),
                     literal: true,
                     icon: ActionRingIcon::Copy,
+                    opens_folder: false,
                 },
             )]
             .into(),
             language: None,
             size,
+            flyout: None,
         }
     }
 

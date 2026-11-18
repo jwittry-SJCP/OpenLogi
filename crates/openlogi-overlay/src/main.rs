@@ -112,6 +112,26 @@ fn main() -> Result<()> {
                 };
                 openlogi_core::locale::activate(invocation.language.as_deref());
                 cx.update(|cx| {
+                    let mut updated = false;
+                    for ring in cx
+                        .windows()
+                        .into_iter()
+                        .filter_map(|handle| handle.downcast::<RingView>())
+                    {
+                        updated |= ring
+                            .update(cx, |view, _, cx| {
+                                if view.session_id() != invocation.session_id {
+                                    return false;
+                                }
+                                view.replace_page(invocation.clone());
+                                cx.notify();
+                                true
+                            })
+                            .unwrap_or(false);
+                    }
+                    if updated {
+                        return;
+                    }
                     close_all_ring_windows(cx);
                     let edge = gpui::px(Geometry::of(invocation.size).window);
                     #[cfg_attr(

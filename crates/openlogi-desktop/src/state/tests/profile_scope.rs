@@ -194,7 +194,7 @@ fn resetting_profiles_restores_inheritance_without_closing_the_editors() {
     let _ = state.set_editing_action_ring_app(Some(safari.into()));
     assert_eq!(
         state.current_action_ring_layout().slots[&ActionRingSlot::Top].action(),
-        &Action::Redo
+        Some(&Action::Redo)
     );
 
     let _ = state.remove_app_profile(&DeviceKey::from(KNOWN_MOUSE_KEY), safari);
@@ -271,7 +271,7 @@ fn removing_all_app_profiles_only_closes_editors_showing_that_app() {
         assert!(!ring.per_app.contains_key("Safari"));
         assert_eq!(
             ring.per_app["Chrome"].slots[&ActionRingSlot::Top].action(),
-            &Action::Redo
+            Some(&Action::Redo)
         );
         let _ = state.set_editing_app(Some("Chrome".into()));
         assert_eq!(state.button_bindings()[&ButtonId::Back], Action::Undo);

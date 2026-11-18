@@ -29,7 +29,7 @@ mod tests;
 pub use action::{Action, HeldKeys, WorkflowStep};
 pub use action_ring::{
     ActionRingConfig, ActionRingEntry, ActionRingIcon, ActionRingLayout, ActionRingSize,
-    ActionRingSlot, RingAction, RingActionError,
+    ActionRingSlot, HapticStrength, RingAction, RingActionError,
 };
 pub use application_target::{ApplicationTarget, ApplicationTargetError};
 pub use button::{ButtonId, GridKey, GridSlot, KeypadPage, ParseButtonIdError};

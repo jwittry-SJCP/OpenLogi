@@ -587,8 +587,9 @@ impl Agent for AgentServer {
         session_id: u64,
         slot: ActionRingSlot,
     ) -> Result<(), ActionRingCommandError> {
-        let activation = self.action_ring.activate(session_id, slot)?;
-        run_ring_activation(&self.dispatcher, &self.ring_haptics, session_id, activation);
+        if let Some(activation) = self.action_ring.activate(session_id, slot)? {
+            run_ring_activation(&self.dispatcher, &self.ring_haptics, session_id, activation);
+        }
         Ok(())
     }
 

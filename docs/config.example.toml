@@ -1,5 +1,5 @@
 # OpenLogi configuration example. Copy only the sections you need.
-schema_version = 11
+schema_version = 13
 selected_device = "receiver:aabbccdd:slot:1"
 
 [app_settings]
@@ -98,9 +98,12 @@ Forward = "NextTab"
 [devices."receiver:aabbccdd:slot:1".action_ring]
 enabled = true
 haptics = true
+# Set this device’s haptic strength. Omit to leave it under device control.
+# haptic_strength = 60
 
 [devices."receiver:aabbccdd:slot:1".action_ring.default.slots]
 Top = { action = "Copy", icon = "Keyboard" }
+TopRight = { label = "Editing", folder = { slots = { Top = { action = "Undo" }, Right = { action = "Redo" } } } }
 Right = { action = { OpenApplication = { path = "/Applications/Safari.app", display_name = "Safari" } }, icon = "Applications" }
 Bottom = { action = "ShowDesktop", label = "Desktop" }
 

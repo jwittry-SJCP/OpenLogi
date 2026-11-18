@@ -181,7 +181,9 @@ pub use succession::Identity;
 ///      chooses on release, so the overlay reports the pointer leaving every
 ///      slot as well as entering one. `ActionRingInvocation::size` appended,
 ///      the size the overlay draws the ring at.
-pub const PROTOCOL_VERSION: u32 = 45;
+/// v46: Actions Ring folder presentations.
+/// v47: Actions Ring compact flyout anchor.
+pub const PROTOCOL_VERSION: u32 = 47;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -780,6 +782,8 @@ pub struct ActionRingPresentation {
     pub literal: bool,
     /// Fully resolved icon; the overlay does not need the executable action.
     pub icon: ActionRingIcon,
+    /// Activation replaces the visible ring with this folder’s contents.
+    pub opens_folder: bool,
 }
 
 /// One request for the overlay helper to display an Actions Ring.
@@ -794,6 +798,8 @@ pub struct ActionRingInvocation {
     pub language: Option<String>,
     /// How large the overlay draws this ring.
     pub size: ActionRingSize,
+    /// Parent slot that anchors a compact submenu beside the ring centre.
+    pub flyout: Option<ActionRingSlot>,
 }
 
 /// The ring the overlay should be showing, stamped with its generation.

@@ -1,11 +1,19 @@
 //! Actions Ring settings and editor scope for the selected device.
 
 use openlogi_core::binding::{
-    ActionRingConfig, ActionRingIcon, ActionRingLayout, ActionRingSize, ActionRingSlot, RingAction,
+    ActionRingConfig, ActionRingEntry, ActionRingIcon, ActionRingLayout, ActionRingSize,
+    ActionRingSlot, RingAction,
 };
 
 use super::events::StateEvents;
 use super::{AppState, DeviceKey, DeviceRecord, StateEvent};
+
+#[derive(Clone, Default)]
+pub(super) struct FolderLocation {
+    device: String,
+    app: Option<String>,
+    path: Vec<ActionRingSlot>,
+}
 
 impl AppState {
     /// Actions Ring settings for the active device, including its implicit
@@ -39,6 +47,7 @@ impl AppState {
         else {
             return events;
         };
+        self.action_ring_folder = None;
         if let Some(app) = app {
             self.action_ring_editing_apps.insert(key, app);
         } else {
@@ -53,8 +62,130 @@ impl AppState {
     /// or `exe:` key would apply to the same application.
     #[must_use]
     pub fn current_action_ring_layout(&self) -> ActionRingLayout {
-        self.current_action_ring()
-            .profile_layout(self.editing_action_ring_app())
+        let root = self
+            .current_action_ring()
+            .profile_layout(self.editing_action_ring_app());
+        self.action_ring_folder_path()
+            .iter()
+            .try_fold(&root, |layout, slot| {
+                layout.slots.get(slot).and_then(ActionRingEntry::folder)
+            })
+            .unwrap_or(&root)
+            .clone()
+    }
+
+    pub(crate) fn action_ring_folder_path(&self) -> &[ActionRingSlot] {
+        self.action_ring_folder
+            .as_ref()
+            .filter(|folder| {
+                self.current_record()
+                    .and_then(DeviceRecord::persistent_config_key)
+                    == Some(folder.device.as_str())
+                    && self.editing_action_ring_app() == folder.app.as_deref()
+            })
+            .map_or(&[], |folder| folder.path.as_slice())
+    }
+
+    pub(crate) fn navigate_action_ring_folder(
+        &mut self,
+        destination: Option<ActionRingSlot>,
+    ) -> StateEvents {
+        let events = self.for_current_device(StateEvent::BindingsChanged);
+        let Some(device) = self
+            .current_record()
+            .and_then(DeviceRecord::persistent_config_key)
+        else {
+            return events;
+        };
+        let mut path = self.action_ring_folder_path().to_vec();
+        if let Some(slot) = destination {
+            if self
+                .current_action_ring_layout()
+                .slots
+                .get(&slot)
+                .and_then(ActionRingEntry::folder)
+                .is_none()
+            {
+                return events;
+            }
+            path.push(slot);
+        } else {
+            path.pop();
+        }
+        self.action_ring_folder = Some(FolderLocation {
+            device: device.to_owned(),
+            app: self.editing_action_ring_app().map(str::to_owned),
+            path,
+        });
+        events
+    }
+
+    pub(crate) fn create_action_ring_folder(&mut self, slot: ActionRingSlot) -> StateEvents {
+        self.edit_action_ring_layout("Actions Ring folder", |layout| layout.add_folder(slot))
+    }
+
+    pub(crate) fn set_ring_folder_flyout(
+        &mut self,
+        slot: ActionRingSlot,
+        flyout: bool,
+    ) -> StateEvents {
+        self.edit_action_ring_layout("Actions Ring folder layout", |layout| {
+            layout.set_folder_flyout(slot, flyout);
+        })
+    }
+
+    pub(crate) fn create_ring_volume_flyout(
+        &mut self,
+        slot: ActionRingSlot,
+        label: String,
+    ) -> StateEvents {
+        self.edit_action_ring_layout("Actions Ring volume flyout", |layout| {
+            layout.add_volume_flyout(slot, label);
+        })
+    }
+
+    pub(crate) fn rename_action_ring_folder(
+        &mut self,
+        slot: ActionRingSlot,
+        name: Option<String>,
+    ) -> StateEvents {
+        self.edit_action_ring_layout("Actions Ring folder name", |layout| {
+            layout.set_label(slot, name);
+        })
+    }
+
+    pub(crate) fn move_action_ring_slot(
+        &mut self,
+        from: ActionRingSlot,
+        to: ActionRingSlot,
+    ) -> StateEvents {
+        if from == to || !self.current_action_ring_layout().slots.contains_key(&from) {
+            return StateEvents::none();
+        }
+        self.edit_action_ring_layout("Actions Ring slot order", |layout| {
+            layout.move_slot(from, to);
+        })
+    }
+
+    pub(crate) fn commit_haptic_strength(&mut self, strength: u8) -> StateEvents {
+        let events = self.for_current_device(StateEvent::BindingsChanged);
+        let Some(key) = self
+            .current_record()
+            .and_then(DeviceRecord::persistent_config_key)
+            .map(str::to_owned)
+        else {
+            return events;
+        };
+        self.config.edit(|config| {
+            config
+                .devices
+                .entry(key)
+                .or_default()
+                .action_ring
+                .haptic_strength = openlogi_core::binding::HapticStrength::try_new(strength).ok();
+        });
+        self.persist_and_reload("Haptic feedback strength");
+        events
     }
 
     /// Replace or clear one slot in the open Actions Ring layout.
@@ -93,6 +224,7 @@ impl AppState {
             return events;
         };
         let app = self.editing_action_ring_app().map(str::to_string);
+        let path = self.action_ring_folder_path().to_vec();
         self.config.edit(|config| {
             let ring = &mut config.devices.entry(key).or_default().action_ring;
             let layout = match app {
@@ -102,7 +234,12 @@ impl AppState {
                 }
                 None => &mut ring.default,
             };
-            edit(layout);
+            if let Some(layout) = path
+                .into_iter()
+                .try_fold(layout, ActionRingLayout::folder_mut)
+            {
+                edit(layout);
+            }
         });
         self.persist_and_reload(what);
         events
@@ -111,6 +248,7 @@ impl AppState {
     /// Restore live default inheritance while keeping the application's editor open.
     pub fn reset_action_ring_profile(&mut self, key: &DeviceKey, app: &str) -> StateEvents {
         self.clear_action_ring_profile(key.as_str(), app);
+        self.action_ring_folder = None;
         StateEvent::BindingsChanged(key.clone()).into()
     }
 

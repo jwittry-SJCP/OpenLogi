@@ -31,12 +31,13 @@ use objc2::runtime::{AnyObject, NSObject};
 use objc2::{
     AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
 };
-use objc2_app_kit::NSStatusItem;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSImage, NSRunningApplication, NSWorkspace,
     NSWorkspaceSessionDidBecomeActiveNotification, NSWorkspaceSessionDidResignActiveNotification,
 };
-use objc2_foundation::{NSNotification, NSString};
+use objc2_app_kit::{NSMenu, NSMenuDelegate, NSMenuItem, NSStatusItem};
+use objc2_foundation::{NSNotification, NSObjectProtocol, NSString};
+use openlogi_agent_core::observable::ObservableState;
 use openlogi_core::brand::{self, DeeplinkCommand};
 use openlogi_core::config::AppIcon;
 use openlogi_hid::DeviceIoSignal;
@@ -60,6 +61,7 @@ thread_local! {
     /// on the main thread, which is the same thread that installed it, so the
     /// affinity AppKit demands is the affinity the storage already has.
     static TRAY: RefCell<Option<TrayState>> = const { RefCell::new(None) };
+    static INVENTORY: RefCell<Option<Arc<ObservableState>>> = const { RefCell::new(None) };
     /// Where menu actions hand process termination to the async lifecycle.
     /// Kept separately because the AppKit loop still exists when the status
     /// item is hidden by preference.
@@ -175,6 +177,19 @@ define_class!(
     #[name = "OpenLogiAgentMenuTarget"]
     struct MenuTarget;
 
+    // SAFETY: the AppKit delegate methods below use their generated signatures.
+    unsafe impl NSObjectProtocol for MenuTarget {}
+
+    // SAFETY: MenuTarget is main-thread-only and implements the optional
+    // delegate method exactly as declared by AppKit.
+    unsafe impl NSMenuDelegate for MenuTarget {
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            let Some(mtm) = MainThreadMarker::new() else { return };
+            refresh_battery_rows(menu, mtm);
+        }
+    }
+
     impl MenuTarget {
         #[unsafe(method(openOpenLogi:))]
         fn open_openlogi(&self, _sender: Option<&AnyObject>) {
@@ -277,7 +292,9 @@ pub fn run_app_loop(
     app_icon: AppIcon,
     device_io_signal: DeviceIoSignal,
     shutdown_tx: ShutdownRequestSender,
+    observable: Arc<ObservableState>,
 ) -> ! {
+    INVENTORY.set(Some(observable));
     SHUTDOWN_TX.with_borrow_mut(|slot| *slot = Some(shutdown_tx));
     let Some(mtm) = MainThreadMarker::new() else {
         warn!("agent AppKit loop not started off the main thread — exiting");
@@ -368,6 +385,7 @@ fn install_status_item(mtm: MainThreadMarker, app_icon: AppIcon) {
 /// for both the install and a [`relocalize`] rebuild, so the two cannot drift.
 fn build_menu(mtm: MainThreadMarker, target: &MenuTarget) -> Retained<objc2_app_kit::NSMenu> {
     let menu = status_item::new_menu(mtm);
+    menu.setDelegate(Some(objc2::runtime::ProtocolObject::from_ref(target)));
 
     let show = status_item::new_action_item(
         mtm,
@@ -421,6 +439,52 @@ fn build_menu(mtm: MainThreadMarker, target: &MenuTarget) -> Retained<objc2_app_
     }
     menu.addItem(&quit);
     menu
+}
+
+/// Identifies the transient battery rows and their separator.
+const BATTERY_ROW_TAG: isize = -81;
+
+fn refresh_battery_rows(menu: &NSMenu, mtm: MainThreadMarker) {
+    while let Some(row) = menu.itemWithTag(BATTERY_ROW_TAG) {
+        menu.removeItem(&row);
+    }
+    let Some(snapshot) =
+        INVENTORY.with_borrow(|state| state.as_ref().map(|state| state.snapshot()))
+    else {
+        return;
+    };
+    let rows = snapshot
+        .inventory
+        .iter()
+        .flat_map(|inventory| &inventory.paired)
+        .filter(|device| device.online)
+        .filter_map(|device| {
+            let name = device.codename.as_deref()?;
+            let battery = device.battery.as_ref()?.percentage?;
+            Some(format!("{name}  {battery}%"))
+        });
+    let mut count = 0;
+    for title in rows {
+        // SAFETY: This informational row has no action or target; the title
+        // and an empty key equivalent are valid throughout the initializer.
+        let row = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&title),
+                None,
+                &NSString::from_str(""),
+            )
+        };
+        row.setEnabled(false);
+        row.setTag(BATTERY_ROW_TAG);
+        menu.insertItem_atIndex(&row, count);
+        count += 1;
+    }
+    if count > 0 {
+        let separator = NSMenuItem::separatorItem(mtm);
+        separator.setTag(BATTERY_ROW_TAG);
+        menu.insertItem_atIndex(&separator, count);
+    }
 }
 
 #[cfg(test)]

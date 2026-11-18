@@ -176,16 +176,73 @@ fn validate_ring_action(action: &Action) -> Result<(), RingActionError> {
     }
 }
 
-/// One populated Actions Ring slot.
-///
-/// Keeping the action and optional presentation icon in one value makes an
-/// orphan icon impossible: clearing a slot removes the complete entry.
+/// One populated Actions Ring slot. Existing shortcut entries keep their
+/// original TOML form; a folder owns a separate ring layout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ActionRingEntry {
+    /// A shortcut that runs immediately.
+    Shortcut(RingShortcut),
+    /// A folder that opens its own shortcuts.
+    Folder(RingFolder),
+}
+
+impl<'de> Deserialize<'de> for ActionRingEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct EntryFields {
+            action: Option<RingAction>,
+            folder: Option<ActionRingLayout>,
+            #[serde(default)]
+            flyout: bool,
+            icon: Option<ActionRingIcon>,
+            label: Option<String>,
+        }
+
+        let EntryFields {
+            action,
+            folder,
+            flyout,
+            icon,
+            label,
+        } = EntryFields::deserialize(deserializer)?;
+        match (action, folder, icon, flyout) {
+            (Some(action), None, icon, false) => Ok(Self::Shortcut(RingShortcut {
+                action,
+                icon,
+                label,
+            })),
+            (None, Some(folder), None, flyout) => Ok(Self::Folder(RingFolder {
+                folder,
+                flyout,
+                label,
+            })),
+            _ => Err(serde::de::Error::custom(
+                "a ring slot needs exactly one action or folder; icons belong to actions",
+            )),
+        }
+    }
+}
+
+/// An executable ring slot and its optional presentation overrides.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActionRingEntry {
+pub struct RingShortcut {
     action: RingAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     icon: Option<ActionRingIcon>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+}
+
+/// The layout and optional display name owned by a folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RingFolder {
+    folder: ActionRingLayout,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    flyout: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
 }
@@ -194,50 +251,53 @@ impl ActionRingEntry {
     /// Create a slot with its action-derived icon and label.
     #[must_use]
     pub const fn new(action: RingAction) -> Self {
-        Self {
+        Self::Shortcut(RingShortcut {
             action,
             icon: None,
             label: None,
+        })
+    }
+
+    /// The executable action, when the entry is a shortcut.
+    #[must_use]
+    pub fn action(&self) -> Option<&Action> {
+        match self {
+            Self::Shortcut(shortcut) => Some(shortcut.action.action()),
+            Self::Folder(_) => None,
         }
     }
 
-    /// Executable action for this slot.
+    /// The shortcuts shown after opening this folder.
     #[must_use]
-    pub fn action(&self) -> &Action {
-        self.action.action()
+    pub const fn folder(&self) -> Option<&ActionRingLayout> {
+        match self {
+            Self::Folder(folder) => Some(&folder.folder),
+            Self::Shortcut(_) => None,
+        }
     }
 
-    /// User-selected icon, or `None` to derive it from [`Self::action`].
+    /// Whether this folder is presented as a compact flyout.
+    #[must_use]
+    pub fn shows_flyout(&self) -> bool {
+        matches!(self, Self::Folder(folder) if folder.flyout && folder.folder.slots.len() <= 4)
+    }
+
+    /// User-selected icon, or `None` to derive it from the entry.
     #[must_use]
     pub const fn custom_icon(&self) -> Option<ActionRingIcon> {
-        self.icon
+        match self {
+            Self::Shortcut(shortcut) => shortcut.icon,
+            Self::Folder(_) => Some(ActionRingIcon::Folder),
+        }
     }
 
-    /// User-provided display label, or `None` to derive one from
-    /// [`Self::action`]. Free text: the overlay's localization pass returns
-    /// unknown keys verbatim, so user labels render as written.
+    /// User-provided display label, if set.
     #[must_use]
     pub fn custom_label(&self) -> Option<&str> {
-        self.label.as_deref()
-    }
-
-    /// Consume the entry into its executable action and presentation
-    /// overrides (icon, label).
-    #[must_use]
-    pub fn into_parts(self) -> (Action, Option<ActionRingIcon>, Option<String>) {
-        (self.action.into_action(), self.icon, self.label)
-    }
-
-    fn replace_action(&mut self, action: RingAction) {
-        self.action = action;
-    }
-
-    fn set_icon(&mut self, icon: Option<ActionRingIcon>) {
-        self.icon = icon;
-    }
-
-    fn set_label(&mut self, label: Option<String>) {
-        self.label = label;
+        match self {
+            Self::Shortcut(shortcut) => shortcut.label.as_deref(),
+            Self::Folder(folder) => folder.label.as_deref(),
+        }
     }
 }
 
@@ -254,7 +314,10 @@ impl ActionRingLayout {
     /// Replace or clear a slot while preserving its custom icon when replaced.
     pub fn set_action(&mut self, slot: ActionRingSlot, action: Option<RingAction>) {
         match (self.slots.entry(slot), action) {
-            (Entry::Occupied(mut entry), Some(action)) => entry.get_mut().replace_action(action),
+            (Entry::Occupied(mut entry), Some(action)) => match entry.get_mut() {
+                ActionRingEntry::Shortcut(shortcut) => shortcut.action = action,
+                folder @ ActionRingEntry::Folder(_) => *folder = ActionRingEntry::new(action),
+            },
             (Entry::Vacant(entry), Some(action)) => {
                 entry.insert(ActionRingEntry::new(action));
             }
@@ -265,17 +328,80 @@ impl ActionRingLayout {
         }
     }
 
+    /// Add an empty folder to an unused slot.
+    pub fn add_folder(&mut self, slot: ActionRingSlot) {
+        self.slots.entry(slot).or_insert_with(|| {
+            ActionRingEntry::Folder(RingFolder {
+                folder: Self {
+                    slots: BTreeMap::new(),
+                },
+                flyout: false,
+                label: None,
+            })
+        });
+    }
+
+    /// Switch an eligible folder between the full ring and compact flyout.
+    pub fn set_folder_flyout(&mut self, slot: ActionRingSlot, flyout: bool) {
+        if let Some(ActionRingEntry::Folder(folder)) = self.slots.get_mut(&slot) {
+            folder.flyout = flyout && folder.folder.slots.len() <= 4;
+        }
+    }
+
+    /// Put the system volume actions in an empty slot as a compact flyout.
+    pub fn add_volume_flyout(&mut self, slot: ActionRingSlot, label: String) {
+        if self.slots.contains_key(&slot) {
+            return;
+        }
+        self.add_folder(slot);
+        if let Some(folder) = self.folder_mut(slot) {
+            for (child, action) in [
+                (ActionRingSlot::Top, Action::VolumeUp),
+                (ActionRingSlot::Right, Action::MuteVolume),
+                (ActionRingSlot::Bottom, Action::VolumeDown),
+            ] {
+                folder.set_action(child, RingAction::new(action).ok());
+            }
+        }
+        self.set_folder_flyout(slot, true);
+        self.set_label(slot, Some(label));
+    }
+
+    /// Resolve the folder at the given slot within this layout.
+    pub fn folder_mut(&mut self, slot: ActionRingSlot) -> Option<&mut Self> {
+        match self.slots.get_mut(&slot)? {
+            ActionRingEntry::Folder(folder) => Some(&mut folder.folder),
+            ActionRingEntry::Shortcut(_) => None,
+        }
+    }
+
+    /// Move the complete entry to an empty destination or swap two entries.
+    pub fn move_slot(&mut self, from: ActionRingSlot, to: ActionRingSlot) {
+        if from == to {
+            return;
+        }
+        let Some(entry) = self.slots.remove(&from) else {
+            return;
+        };
+        if let Some(displaced) = self.slots.insert(to, entry) {
+            self.slots.insert(from, displaced);
+        }
+    }
+
     /// Set a custom icon for a populated slot. Empty slots remain empty.
     pub fn set_icon(&mut self, slot: ActionRingSlot, icon: Option<ActionRingIcon>) {
-        if let Some(entry) = self.slots.get_mut(&slot) {
-            entry.set_icon(icon);
+        if let Some(ActionRingEntry::Shortcut(entry)) = self.slots.get_mut(&slot) {
+            entry.icon = icon;
         }
     }
 
     /// Set a custom label for a populated slot. Empty slots remain empty.
     pub fn set_label(&mut self, slot: ActionRingSlot, label: Option<String>) {
         if let Some(entry) = self.slots.get_mut(&slot) {
-            entry.set_label(label);
+            match entry {
+                ActionRingEntry::Shortcut(entry) => entry.label = label,
+                ActionRingEntry::Folder(entry) => entry.label = label,
+            }
         }
     }
 }
@@ -334,6 +460,29 @@ impl ActionRingSize {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
 }
 
+/// Device-wide haptic strength in whole percent.
+#[nutype(
+    validate(less_or_equal = 100),
+    derive(Clone, Copy, Debug, PartialEq, Eq, Into, Serialize, Deserialize)
+)]
+pub struct HapticStrength(u8);
+
+impl HapticStrength {
+    /// Intensity levels offered for the MX Master 4, including off.
+    pub const LEVELS: [u8; 5] = [0, 15, 45, 60, 100];
+
+    /// Resolve older slider values to the nearest supported intensity.
+    #[must_use]
+    pub fn nearest_level(self) -> Self {
+        let requested = u8::from(self);
+        Self::LEVELS
+            .into_iter()
+            .min_by_key(|level| level.abs_diff(requested))
+            .and_then(|level| Self::try_new(level).ok())
+            .unwrap_or(self)
+    }
+}
+
 /// Per-device Actions Ring settings and application-specific layouts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,6 +493,9 @@ pub struct ActionRingConfig {
     /// Whether ring hover and activation transitions play device haptics.
     #[serde(default = "default_true")]
     pub haptics: bool,
+    /// Optional device-wide strength. An untouched device keeps its own setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haptic_strength: Option<HapticStrength>,
     /// How large the ring is drawn.
     #[serde(default)]
     pub size: ActionRingSize,
@@ -360,6 +512,7 @@ impl Default for ActionRingConfig {
         Self {
             enabled: true,
             haptics: true,
+            haptic_strength: None,
             size: ActionRingSize::default(),
             default: ActionRingLayout::default(),
             per_app: BTreeMap::new(),
@@ -537,7 +690,10 @@ mod tests {
         let decoded = toml::from_str::<ActionRingLayout>(&encoded)
             .expect("could not deserialize ring layout");
         assert_eq!(decoded, layout);
-        assert_eq!(decoded.slots[&ActionRingSlot::Top].action(), &Action::Cut);
+        assert_eq!(
+            decoded.slots[&ActionRingSlot::Top].action(),
+            Some(&Action::Cut)
+        );
         assert_eq!(
             decoded.slots[&ActionRingSlot::Top].custom_icon(),
             Some(ActionRingIcon::Keyboard)
@@ -554,15 +710,51 @@ Bottom = { action = { CustomShortcut = "Cmd+Shift+P" } }
 "#,
         )
         .expect("documented ring layout failed");
-        assert_eq!(layout.slots[&ActionRingSlot::Top].action(), &Action::Copy);
+        assert_eq!(
+            layout.slots[&ActionRingSlot::Top].action(),
+            Some(&Action::Copy)
+        );
         assert_eq!(
             layout.slots[&ActionRingSlot::Top].custom_icon(),
             Some(ActionRingIcon::Keyboard)
         );
         assert!(matches!(
             layout.slots[&ActionRingSlot::Bottom].action(),
-            Action::CustomShortcut(_)
+            Some(Action::CustomShortcut(_))
         ));
+    }
+
+    #[test]
+    fn move_and_swap_preserve_the_folder_and_shortcut_metadata() {
+        use ActionRingSlot::{Bottom, Left, Right, Top};
+        let mut layout = ActionRingLayout {
+            slots: BTreeMap::new(),
+        };
+        layout.add_folder(Top);
+        layout.set_label(Top, Some("Editing".into()));
+        layout
+            .folder_mut(Top)
+            .unwrap()
+            .set_action(Left, Some(RingAction::new(Action::Copy).unwrap()));
+        layout.set_action(Right, Some(RingAction::new(Action::Paste).unwrap()));
+        layout.set_icon(Right, Some(ActionRingIcon::Keyboard));
+        assert_eq!(layout.slots.len(), 2);
+        layout.move_slot(Top, Bottom);
+        assert!(!layout.slots.contains_key(&Top));
+        assert_eq!(layout.slots[&Bottom].custom_label(), Some("Editing"));
+        layout.move_slot(Bottom, Right);
+        assert_eq!(layout.slots[&Bottom].action(), Some(&Action::Paste));
+        assert_eq!(
+            layout.slots[&Bottom].custom_icon(),
+            Some(ActionRingIcon::Keyboard)
+        );
+        let inner = layout.slots[&Right].folder().unwrap();
+        assert_eq!(inner.slots[&Left].action(), Some(&Action::Copy));
+        let encoded = toml::to_string_pretty(&layout).unwrap();
+        assert_eq!(
+            toml::from_str::<ActionRingLayout>(&encoded).unwrap(),
+            layout
+        );
     }
 
     #[test]
