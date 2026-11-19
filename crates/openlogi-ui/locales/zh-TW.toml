@@ -748,6 +748,18 @@ camera_light_auto_description = "任何攝影機使用時開燈，所有攝影�
 keyboard_lighting_description = "由 OpenLogi 在執行時套用，不會儲存在鍵盤中。"
 
 [action_ring]
+folder_creation = "Actions Ring Folder"
+add_folder = "Add Folder"
+use_folder_icon = "Use Folder Icon"
+use_flyout_icon = "Use Flyout Icon"
+compact_flyout = "Compact Flyout"
+use_full_ring = "Convert to Folder"
+add_compact_flyout = "Add Compact Flyout"
+flyout_action = "Flyout Action %{number}"
+use_compact_flyout = "Convert to Flyout"
+open_folder = "Open Folder"
+rename_folder = "Rename"
+parent_ring = "Back to Parent Ring"
 actions_ring = "動作環"
 action_ring_description = "設定顯示在指標周圍的八個動作。"
 enable_ring = "Show ring on button press"

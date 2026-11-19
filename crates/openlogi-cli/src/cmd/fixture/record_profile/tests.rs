@@ -451,6 +451,15 @@ impl Agent for TestAgent {
         unreachable!("profile capture must never pair a computer")
     }
 
+    async fn action_ring_activate_parent(
+        self,
+        _: TarpcContext,
+        _session_id: u64,
+        _slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError> {
+        unreachable!("profile capture must not drive the Actions Ring")
+    }
+
     async fn action_ring_unhover(
         self,
         _: TarpcContext,

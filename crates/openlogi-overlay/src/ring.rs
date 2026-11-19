@@ -13,8 +13,9 @@ use gpui::{
     WindowBackgroundAppearance, WindowId, WindowKind, WindowOptions, canvas, div,
     linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, svg,
 };
+use openlogi_core::action_ring::compact_slot_centre;
 use openlogi_core::binding::{Action, ActionRingSize, ActionRingSlot};
-use openlogi_ipc::ActionRingInvocation;
+use openlogi_ipc::{ActionRingInvocation, ActionRingPresentation};
 use openlogi_ui::action_icons::RING_CANCEL_ICON;
 use openlogi_ui::color::{self, neutral};
 use std::sync::Arc;
@@ -54,7 +55,7 @@ impl Geometry {
     pub(crate) const fn of(size: ActionRingSize) -> Self {
         match size {
             ActionRingSize::Small => Self {
-                window: 330.0,
+                window: 580.0,
                 radius: 62.0,
                 slot: 36.0,
                 selected_slot: 42.0,
@@ -66,7 +67,7 @@ impl Geometry {
                 dead_zone: 20.0,
             },
             ActionRingSize::Medium => Self {
-                window: 360.0,
+                window: 630.0,
                 radius: 76.0,
                 slot: 44.0,
                 selected_slot: 50.0,
@@ -78,7 +79,7 @@ impl Geometry {
                 dead_zone: 24.0,
             },
             ActionRingSize::Large => Self {
-                window: 400.0,
+                window: 700.0,
                 radius: 96.0,
                 slot: 54.0,
                 selected_slot: 62.0,
@@ -213,6 +214,56 @@ fn aimed_slot(
         .then_some(aimed)
 }
 
+/// Put up to four child actions in a shallow arc beside the cursor. The
+/// visible bubbles and their hit areas share the same centres.
+fn flyout_centres(
+    anchor: ActionRingSlot,
+    filled: &[ActionRingSlot],
+    geometry: Geometry,
+) -> impl Iterator<Item = (ActionRingSlot, f32, f32)> + '_ {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a flyout has at most twelve actions"
+    )]
+    let count = filled.len() as f32;
+    filled
+        .iter()
+        .copied()
+        .enumerate()
+        .map(move |(index, slot)| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a flyout has at most twelve actions"
+            )]
+            let index = index as f32;
+            let (x, y) = compact_slot_centre(
+                anchor,
+                index,
+                count,
+                geometry.radius,
+                geometry.selected_slot,
+            );
+            (slot, x, y)
+        })
+}
+
+fn target_slot(
+    filled: &[ActionRingSlot],
+    flyout: Option<ActionRingSlot>,
+    geometry: Geometry,
+    x: f32,
+    y: f32,
+) -> Option<ActionRingSlot> {
+    flyout.map_or_else(
+        || aimed_slot(filled.iter().copied(), geometry, x, y),
+        |anchor| {
+            flyout_centres(anchor, filled, geometry)
+                .find(|&(_, cx, cy)| (x - cx).hypot(y - cy) <= geometry.selected_slot / 2.0 + 2.0)
+                .map(|(slot, _, _)| slot)
+        },
+    )
+}
+
 /// Corners of the beam from the centre to a highlighted `slot`, in panel
 /// coordinates: the centre, the two points where its sides touch the grown
 /// slot, and the slot's own centre, which the slot covers.
@@ -310,20 +361,29 @@ struct LabelPlace {
 }
 
 impl LabelPlace {
+    fn beside_flyout(x: f32, y: f32, geometry: Geometry) -> Self {
+        let radius = x.hypot(y);
+        Self::along(x / radius, y / radius, radius, geometry)
+    }
+
     fn of(slot: ActionRingSlot, geometry: Geometry) -> Self {
-        let centre = geometry.window / 2.0;
         let (x, y) = slot.unit_offset();
+        Self::along(x, y, geometry.radius, geometry)
+    }
+
+    fn along(x: f32, y: f32, radius: f32, geometry: Geometry) -> Self {
+        let centre = geometry.window / 2.0;
         let horizontal = Grow::away_from_centre(x);
         let ((anchor_x, anchor_y), vertical) = if Grow::away_from_centre(y) == Grow::Centred {
             (
                 (
-                    centre + x * (geometry.radius + LABEL_GAP),
+                    centre + x * (radius + LABEL_GAP),
                     centre - geometry.selected_slot / 2.0 - LABEL_GAP,
                 ),
                 Grow::Before,
             )
         } else {
-            let reach = geometry.radius + geometry.selected_slot / 2.0 + LABEL_GAP;
+            let reach = radius + geometry.selected_slot / 2.0 + LABEL_GAP;
             (
                 (centre + x * reach, centre + y * reach),
                 Grow::away_from_centre(y),
@@ -459,6 +519,14 @@ impl RingView {
         self.invocation.session_id
     }
 
+    /// Update an open ring in place when its folder page changes.
+    pub(crate) fn replace_page(&mut self, invocation: ActionRingInvocation) {
+        if self.invocation != invocation {
+            self.invocation = invocation;
+            self.hovered = None;
+        }
+    }
+
     /// Report this ring cancelled. The window is closed by the caller, which
     /// is the only one holding the handle.
     pub(crate) fn cancel(&self) {
@@ -487,10 +555,15 @@ impl RingView {
         Geometry::of(self.invocation.size)
     }
 
-    fn slot_element(&self, slot: ActionRingSlot, colors: RingColors) -> Option<gpui::AnyElement> {
-        let presentation = self.invocation.slots.get(&slot)?;
+    fn slot_element(
+        &self,
+        slot: ActionRingSlot,
+        presentation: &ActionRingPresentation,
+        selected: bool,
+        compact_centre: Option<(f32, f32)>,
+        colors: RingColors,
+    ) -> gpui::AnyElement {
         let icon_path = presentation.icon.asset_path();
-        let selected = self.hovered == Some(slot);
         let geometry = self.geometry();
         let (size, glyph_size, glyph) = if selected {
             (
@@ -502,39 +575,43 @@ impl RingView {
             (geometry.slot, geometry.glyph, colors.glyph)
         };
         // A hovered slot grows around the centre it rests on.
-        let (left, top) = slot.placement(geometry.window, geometry.radius, size);
-        Some(
-            div()
-                .absolute()
-                .left(px(left))
-                .top(px(top))
-                .size(px(size))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .map(|slot| {
-                    if selected {
-                        // The chosen slot glows in its own colour, fading out
-                        // into the desktop; the others stay crisp.
-                        let fill = color::accent_at_lightness(SELECTED_FILL_L);
-                        slot.border_2()
-                            .border_color(color::accent_at_lightness(SELECTED_BORDER_L))
-                            .bg(fill)
-                            .shadow(vec![BoxShadow {
-                                color: fill.alpha(SELECTED_GLOW_ALPHA),
-                                offset: point(px(0.0), px(0.0)),
-                                blur_radius: px(geometry.halo),
-                                spread_radius: px(geometry.halo / 4.0),
-                                inset: false,
-                            }])
-                    } else {
-                        slot.bg(colors.slot)
-                    }
-                })
-                .child(svg().path(icon_path).size(px(glyph_size)).text_color(glyph))
-                .into_any_element(),
-        )
+        let (left, top) = compact_centre.map_or_else(
+            || slot.placement(geometry.window, geometry.radius, size),
+            |(x, y)| {
+                let origin = (geometry.window - size) / 2.0;
+                (origin + x, origin + y)
+            },
+        );
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(top))
+            .size(px(size))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .map(|slot| {
+                if selected {
+                    // The chosen slot glows in its own colour, fading out
+                    // into the desktop; the others stay crisp.
+                    let fill = color::accent_at_lightness(SELECTED_FILL_L);
+                    slot.border_2()
+                        .border_color(color::accent_at_lightness(SELECTED_BORDER_L))
+                        .bg(fill)
+                        .shadow(vec![BoxShadow {
+                            color: fill.alpha(SELECTED_GLOW_ALPHA),
+                            offset: point(px(0.0), px(0.0)),
+                            blur_radius: px(geometry.halo),
+                            spread_radius: px(geometry.halo / 4.0),
+                            inset: false,
+                        }])
+                } else {
+                    slot.bg(colors.slot)
+                }
+            })
+            .child(svg().path(icon_path).size(px(glyph_size)).text_color(glyph))
+            .into_any_element()
     }
 }
 
@@ -553,15 +630,37 @@ impl RingView {
                 presentation.label.clone()
             } else if let Some(key) = Action::translation_key_for_label(&presentation.label) {
                 rust_i18n::t!(key).into_owned()
+            } else if presentation.opens_folder {
+                rust_i18n::t!("action_ring.folder").into_owned()
             } else {
                 presentation.label.clone()
             };
             Some((slot, SharedString::from(label)))
         });
-        let slots = ActionRingSlot::ALL
+        let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+        let flyout = self.invocation.flyout;
+        let compact: Vec<_> = flyout
             .into_iter()
-            .filter_map(|slot| self.slot_element(slot, colors))
-            .collect::<Vec<_>>();
+            .flat_map(|anchor| flyout_centres(anchor, &filled, geometry))
+            .collect();
+        let centre = |slot| {
+            compact
+                .iter()
+                .find_map(|&(key, x, y)| (key == slot).then_some((x, y)))
+        };
+        let slots = self.invocation.slots.iter().map(|(&slot, entry)| {
+            self.slot_element(
+                slot,
+                entry,
+                self.hovered == Some(slot),
+                centre(slot),
+                colors,
+            )
+        });
+        let anchor = flyout;
+        let parent_slots = self.invocation.parent_slots.iter().map(|(&slot, entry)| {
+            self.slot_element(slot, entry, anchor == Some(slot), None, colors)
+        });
 
         div()
             .relative()
@@ -575,9 +674,10 @@ impl RingView {
                     .rounded_full()
                     .bg(FOOTPRINT_FILL),
             )
-            .when_some(self.hovered, |ring, slot| {
+            .when_some(anchor.or(self.hovered), |ring, slot| {
                 ring.child(beam_element(slot, geometry))
             })
+            .children(parent_slots)
             .children(slots)
             .child(
                 div()
@@ -606,7 +706,10 @@ impl RingView {
             )
             .when_some(hovered_label, |ring, (slot, label)| {
                 ring.child(label_element(
-                    LabelPlace::of(slot, geometry),
+                    centre(slot).map_or_else(
+                        || LabelPlace::of(slot, geometry),
+                        |(x, y)| LabelPlace::beside_flyout(x, y, geometry),
+                    ),
                     label,
                     geometry,
                 ))
@@ -763,7 +866,14 @@ impl Render for RingView {
                     .child(self.panel(colors))
             });
         let click_pointer = self.pointer.clone();
+        let folders: Vec<_> = self
+            .invocation
+            .slots
+            .iter()
+            .filter_map(|(&slot, entry)| entry.opens_folder.then_some(slot))
+            .collect();
         let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+        let flyout = self.invocation.flyout;
 
         div()
             .id("ring-root")
@@ -788,30 +898,45 @@ impl Render for RingView {
                 ) else {
                     return;
                 };
-                let aimed = aimed_slot(this.invocation.slots.keys().copied(), geometry, x, y);
+                let filled: Vec<_> = this.invocation.slots.keys().copied().collect();
+                let aimed = target_slot(&filled, this.invocation.flyout, geometry, x, y);
                 if this.hover(aimed) {
                     cx.notify();
                 }
             }))
             .children(panel)
-            // The view is not borrowed here, so the dismissal can reach every
-            // ring window; the click is aimed from where it landed.
-            .on_click(move |event: &ClickEvent, window, cx| {
-                let aimed = offset_from_centre(
+            // The click is aimed from where it landed, even if the pointer
+            // moved before the last frame could paint the highlight.
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                let offset = offset_from_centre(
                     placement,
                     geometry,
                     click_pointer.read(cx),
                     window,
                     event.position(),
-                )
-                .and_then(|(x, y)| aimed_slot(filled.iter().copied(), geometry, x, y));
+                );
+                let aimed = offset.and_then(|(x, y)| target_slot(&filled, flyout, geometry, x, y));
+                if aimed.is_none() && let Some((x, y)) = offset
+                    && let Some(slot) = this.invocation.parent_slots.keys().copied().find(|slot| {
+                        let (dx, dy) = slot.unit_offset();
+                        (x - dx * geometry.radius).hypot(y - dy * geometry.radius)
+                            <= geometry.selected_slot / 2.0
+                    })
+                {
+                    let _ = root_commands.send(OverlayCommand::ActivateParent { session_id, slot });
+                    return;
+                }
                 let command = match aimed {
                     Some(slot) => OverlayCommand::Activate { session_id, slot },
                     None => OverlayCommand::Cancel { session_id },
                 };
                 let _ = root_commands.send(command);
-                session::dismiss_from_window(cx, window, session_id);
-            })
+                if aimed.is_none_or(|slot| !folders.contains(&slot)) {
+                    window.defer(cx, move |window, cx| {
+                        session::dismiss_from_window(cx, window, session_id);
+                    });
+                }
+            }))
     }
 }
 
@@ -923,7 +1048,7 @@ mod tests {
                 Placement::Window,
                 MEDIUM,
                 None,
-                Size::new(px(360.0), px(360.0))
+                Size::new(px(MEDIUM.window), px(MEDIUM.window))
             ),
             Some(Point::default())
         );
@@ -954,12 +1079,12 @@ mod tests {
         };
         assert_eq!(
             at_pointer(ActionRingSize::Medium),
-            Some(point(px(720.0), px(320.0)))
+            Some(point(px(585.0), px(185.0)))
         );
-        // A large ring's panel is 400 pt across.
+        // A large ring's panel is 700 pt across.
         assert_eq!(
             at_pointer(ActionRingSize::Large),
-            Some(point(px(700.0), px(300.0)))
+            Some(point(px(550.0), px(150.0)))
         );
     }
 
@@ -972,7 +1097,7 @@ mod tests {
                 Some(point(px(4.0), px(1076.0))),
                 Size::new(px(1920.0), px(1080.0))
             ),
-            Some(point(px(0.0), px(720.0)))
+            Some(point(px(0.0), px(450.0)))
         );
     }
 
@@ -1028,6 +1153,42 @@ mod tests {
         assert_eq!(pointer.center_in(below), Some(point(px(10.0), px(20.0))));
     }
 
+    #[test]
+    fn compact_arcs_center_odd_counts_and_fill_the_outer_circle() {
+        use openlogi_core::action_ring::COMPACT_SLOTS;
+        for size in ActionRingSize::ALL {
+            let geometry = Geometry::of(size);
+            for anchor in ActionRingSlot::ALL {
+                let (dx, dy) = anchor.unit_offset();
+                for count in 1..=COMPACT_SLOTS.len() {
+                    let keys = &COMPACT_SLOTS[..count];
+                    let centres: Vec<_> = flyout_centres(anchor, keys, geometry).collect();
+                    for &(slot, x, y) in &centres {
+                        let edge = geometry.window / 2.0 - geometry.selected_slot / 2.0;
+                        assert!(x.abs() < edge && y.abs() < edge);
+                        assert_eq!(target_slot(keys, Some(anchor), geometry, x, y), Some(slot));
+                    }
+                    if count % 2 == 1 {
+                        let (_, x, y) = centres[count / 2];
+                        assert!((x * dy - y * dx).abs() < 0.01);
+                        assert!(x * dx + y * dy > geometry.radius);
+                    }
+                    if count == COMPACT_SLOTS.len() {
+                        let (_, first_x, first_y) = centres[0];
+                        let (_, last_x, last_y) = centres[count - 1];
+                        let (_, next_x, next_y) = centres[1];
+                        assert!(
+                            ((first_x - last_x).hypot(first_y - last_y)
+                                - (first_x - next_x).hypot(first_y - next_y))
+                            .abs()
+                                < 0.01
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn invocation() -> ActionRingInvocation {
         sized_invocation(ActionRingSize::Medium)
     }
@@ -1041,11 +1202,14 @@ mod tests {
                     label: "Copy".to_string(),
                     literal: true,
                     icon: ActionRingIcon::Copy,
+                    opens_folder: false,
                 },
             )]
             .into(),
             language: None,
             size,
+            flyout: None,
+            parent_slots: Default::default(),
         }
     }
 

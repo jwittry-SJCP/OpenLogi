@@ -554,8 +554,21 @@ impl Agent for AgentServer {
         session_id: u64,
         slot: ActionRingSlot,
     ) -> Result<(), ActionRingCommandError> {
-        let activation = self.action_ring.activate(session_id, slot)?;
-        run_ring_activation(&self.dispatcher, &self.ring_haptics, session_id, activation);
+        if let Some(activation) = self.action_ring.activate(session_id, slot)? {
+            run_ring_activation(&self.dispatcher, &self.ring_haptics, session_id, activation);
+        }
+        Ok(())
+    }
+
+    async fn action_ring_activate_parent(
+        self,
+        _: Context,
+        session_id: u64,
+        slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError> {
+        if let Some(activation) = self.action_ring.activate_parent(session_id, slot)? {
+            run_ring_activation(&self.dispatcher, &self.ring_haptics, session_id, activation);
+        }
         Ok(())
     }
 

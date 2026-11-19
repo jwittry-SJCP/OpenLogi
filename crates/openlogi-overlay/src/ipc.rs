@@ -39,6 +39,10 @@ pub(crate) enum OverlayCommand {
         session_id: u64,
         slot: ActionRingSlot,
     },
+    ActivateParent {
+        session_id: u64,
+        slot: ActionRingSlot,
+    },
     Cancel {
         session_id: u64,
     },
@@ -46,7 +50,7 @@ pub(crate) enum OverlayCommand {
 
 impl OverlayCommand {
     pub(crate) const fn is_terminal(self) -> bool {
-        matches!(self, Self::Activate { .. } | Self::Cancel { .. })
+        !matches!(self, Self::Hover { .. })
     }
 }
 
@@ -341,6 +345,10 @@ fn coalesce_command(current: OverlayCommand, next: OverlayCommand) -> OverlayCom
                 session_id: closing,
                 ..
             }
+            | OverlayCommand::ActivateParent {
+                session_id: closing,
+                ..
+            }
             | OverlayCommand::Cancel {
                 session_id: closing,
             },
@@ -367,6 +375,10 @@ async fn send_command(client: &AgentClient, command: OverlayCommand) -> bool {
         } => client.action_ring_unhover(ctx, session_id).await.is_ok(),
         OverlayCommand::Activate { session_id, slot } => client
             .action_ring_activate(ctx, session_id, slot)
+            .await
+            .is_ok(),
+        OverlayCommand::ActivateParent { session_id, slot } => client
+            .action_ring_activate_parent(ctx, session_id, slot)
             .await
             .is_ok(),
         OverlayCommand::Cancel { session_id } => {

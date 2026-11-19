@@ -194,7 +194,8 @@ pub use succession::Identity;
 ///      and `ActionRingIcon::{Channel1, Channel2, Channel3}` appended after
 ///      them — a device's move to another Easy-Switch channel, bound to a
 ///      button or an Actions Ring slot.
-pub const PROTOCOL_VERSION: u32 = 46;
+/// v47: Actions Ring folders and compact flyouts, parent slots, extra outer slots, and the compact flyout icon.
+pub const PROTOCOL_VERSION: u32 = 47;
 
 /// Environment variable through which the agent hands a supervised helper the
 /// run token it will serve, so the helper knows which agent it belongs to
@@ -821,6 +822,8 @@ pub struct ActionRingPresentation {
     pub literal: bool,
     /// Fully resolved icon; the overlay does not need the executable action.
     pub icon: ActionRingIcon,
+    /// Activation opens another ring layout.
+    pub opens_folder: bool,
 }
 
 /// One request for the overlay helper to display an Actions Ring.
@@ -835,6 +838,10 @@ pub struct ActionRingInvocation {
     pub language: Option<String>,
     /// How large the overlay draws this ring.
     pub size: ActionRingSize,
+    /// Parent slot that anchors a compact submenu beside the ring centre.
+    pub flyout: Option<ActionRingSlot>,
+    /// Parent slots retained on screen while a compact popout is open.
+    pub parent_slots: BTreeMap<ActionRingSlot, ActionRingPresentation>,
 }
 
 /// The ring the overlay should be showing, stamped with its generation.
@@ -1263,4 +1270,9 @@ pub trait Agent {
     /// held trigger cancels instead of choosing the slot last reported by
     /// [`Agent::action_ring_hover`].
     async fn action_ring_unhover(session_id: u64) -> Result<(), ActionRingCommandError>;
+    /// Select a slot of the still-visible parent ring. The anchor closes its popout.
+    async fn action_ring_activate_parent(
+        session_id: u64,
+        slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError>;
 }

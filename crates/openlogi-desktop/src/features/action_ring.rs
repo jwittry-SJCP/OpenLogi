@@ -14,18 +14,17 @@ use gpui_kit::component::{
     Icon, IconName, Selectable as _,
     button::{Button, ButtonGroup},
     h_flex,
-    input::InputState,
+    input::{Input, InputState},
     tooltip::Tooltip,
     v_flex,
 };
+use openlogi_core::action_ring::{COMPACT_SLOTS, compact_slot_centre};
 use openlogi_core::binding::{
-    ActionRingConfig, ActionRingEntry, ActionRingIcon, ActionRingLayout, ActionRingSize,
-    ActionRingSlot,
+    ActionRingConfig, ActionRingEntry, ActionRingLayout, ActionRingSize, ActionRingSlot,
 };
 use openlogi_ui::action_icons::RING_CANCEL_ICON;
 
-use self::action_icons::action_icon_path;
-use self::editor::{PowerUserInputs, action_library};
+use self::editor::{PowerUserInputs, action_library, icon_editor};
 use crate::features::keyboard::editors::{PowerUserKind, text_editor_placeholder};
 use crate::state::{AppState, StateEvent};
 use crate::ui::action::localized_action_label;
@@ -37,12 +36,14 @@ use crate::ui::theme::{self, Palette, PressableStyle as _, SelectableStyle as _,
 pub struct ActionRingPanel {
     focus_handle: FocusHandle,
     selected_slot: ActionRingSlot,
+    selected_child: Option<SlotTarget>,
     application_input: Option<Entity<InputState>>,
     shortcut_input: Option<Entity<InputState>>,
     type_text_input: Option<Entity<InputState>>,
     applescript_input: Option<Entity<InputState>>,
     shell_command_input: Option<Entity<InputState>>,
     library_scroll: ScrollHandle,
+    folder_name: Option<Entity<InputState>>,
     #[expect(dead_code, reason = "held to keep the AppState subscription alive")]
     state_obs: Subscription,
 }
@@ -55,12 +56,14 @@ impl ActionRingPanel {
         Self {
             focus_handle: cx.focus_handle(),
             selected_slot: ActionRingSlot::Top,
+            selected_child: None,
             application_input: None,
             shortcut_input: None,
             type_text_input: None,
             applescript_input: None,
             shell_command_input: None,
             library_scroll: ScrollHandle::new(),
+            folder_name: None,
             state_obs,
         }
     }
@@ -120,6 +123,56 @@ impl Render for ActionRingPanel {
         );
         let power_user = self.power_user_inputs(window, cx);
         let view = cx.entity();
+        let in_folder =
+            AppState::try_read(cx).is_some_and(|state| !state.action_ring_folder_path().is_empty());
+        let selected = self.selected_slot;
+        let entry = layout.slots.get(&selected);
+        let compact = entry
+            .filter(|entry| entry.shows_flyout())
+            .and_then(ActionRingEntry::folder)
+            .map(|layout| {
+                let mut children = layout.clone();
+                children.normalize_compact_slots();
+                children
+            });
+        let selected_child = compact.as_ref().and_then(|layout| {
+            let target = self.selected_child?;
+            let count = layout.slots.len();
+            match target.insertion {
+                Some((_, old_count)) if count == old_count => Some(target),
+                _ if layout.slots.contains_key(&target.slot) => {
+                    Some(SlotTarget::child(selected, target.slot))
+                }
+                _ => None,
+            }
+        });
+        let folder_editor = entry
+            .filter(|entry| entry.folder().is_some() && selected_child.is_none())
+            .map(|entry| {
+                let input =
+                    editor_input(&mut self.folder_name, tr!("action_ring.folder"), window, cx);
+                folder_controls(selected, entry, input, &view, pal)
+            });
+        let library_target = selected_child.map_or_else(
+            || {
+                entry
+                    .and_then(ActionRingEntry::folder)
+                    .is_none()
+                    .then_some((SlotTarget::parent(selected), entry))
+            },
+            |child| {
+                Some((
+                    child,
+                    compact.as_ref().and_then(|layout| {
+                        child
+                            .insertion
+                            .is_none()
+                            .then(|| layout.slots.get(&child.slot))
+                            .flatten()
+                    }),
+                ))
+            },
+        );
 
         v_flex()
             .w_full()
@@ -141,6 +194,14 @@ impl Render for ActionRingPanel {
                             .child(tr!("action_ring.action_ring_description")),
                     ),
             )
+            .when(in_folder, |panel| {
+                let view = view.clone();
+                panel.child(
+                    Button::new("ring-parent-folder")
+                        .label(tr!("action_ring.parent_ring"))
+                        .on_click(move |_, _, cx| navigate_folder(&view, None, cx)),
+                )
+            })
             .child(
                 // The editor wraps below the ring when the window is too narrow
                 // for both, rather than clipping them. The ring's own switches
@@ -157,30 +218,39 @@ impl Render for ActionRingPanel {
                             .flex_none()
                             .w(px(PREVIEW_SIZE))
                             .gap_4()
-                            .child(ring_preview(&layout, self.selected_slot, &view, pal))
-                            .child(ring_switches(&ring, haptics_supported, pal, cx)),
+                            .child(ring_preview(
+                                &layout,
+                                selected,
+                                compact.as_ref(),
+                                selected_child,
+                                &view,
+                                pal,
+                            ))
+                            .child(ring_settings(&ring, haptics_supported, pal, cx)),
                     )
-                    .child(action_library(
-                        self.selected_slot,
-                        layout.slots.get(&self.selected_slot),
-                        &application_input,
-                        &shortcut_input,
-                        &power_user,
-                        &self.library_scroll,
-                        pal,
-                    )),
+                    .when_some(folder_editor, ParentElement::child)
+                    .when_some(library_target, |row, target| {
+                        row.child(action_library(
+                            target,
+                            !in_folder,
+                            &application_input,
+                            &shortcut_input,
+                            &power_user,
+                            &self.library_scroll,
+                            pal,
+                        ))
+                    }),
             )
     }
 }
 
-/// The settings that apply to the whole ring: whether a button press opens
-/// it, its size, and its haptics on a device that has them.
-fn ring_switches(
+/// The settings that apply to the whole ring.
+fn ring_settings(
     ring: &ActionRingConfig,
     haptics_supported: bool,
     pal: Palette,
     cx: &App,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     v_flex()
         .gap_3()
         .child(toggle_row(
@@ -194,8 +264,6 @@ fn ring_switches(
                     AppState::apply(cx, |state| state.commit_action_ring_enabled(*enabled));
                 }),
         ))
-        // Three segments beside the caption leave it a few words per line in
-        // this column, so the segment goes under the text instead.
         .child(stacked_row(
             "ring-size-row",
             pal,
@@ -203,8 +271,8 @@ fn ring_switches(
             tr!("action_ring.ring_size_description"),
             size_segment(ring.size, cx),
         ))
-        .when(haptics_supported, |switches| {
-            switches.child(toggle_row(
+        .when(haptics_supported, |panel| {
+            panel.child(toggle_row(
                 "ring-haptics-row",
                 pal,
                 tr!("action_ring.haptic_feedback"),
@@ -216,6 +284,138 @@ fn ring_switches(
                     }),
             ))
         })
+}
+
+fn navigate_folder(view: &Entity<ActionRingPanel>, slot: Option<ActionRingSlot>, cx: &mut App) {
+    AppState::apply(cx, |state| state.navigate_action_ring_folder(slot));
+    view.update(cx, |panel, cx| {
+        panel.selected_slot = ActionRingSlot::Top;
+        panel.selected_child = None;
+        panel.folder_name = None;
+        cx.notify();
+    });
+}
+
+fn folder_controls(
+    slot: ActionRingSlot,
+    entry: &ActionRingEntry,
+    input: Entity<InputState>,
+    view: &Entity<ActionRingPanel>,
+    pal: Palette,
+) -> impl IntoElement + use<> {
+    let view = view.clone();
+    let flyout = entry.shows_flyout();
+    let can_switch_layout = entry
+        .folder()
+        .is_some_and(|layout| !flyout || layout.slots.len() <= ActionRingSlot::ALL.len());
+    v_flex()
+        .flex_1()
+        .min_w(px(280.0))
+        .max_w(px(320.0))
+        .gap_2()
+        .p_3()
+        .rounded(pal.card_radius)
+        .border_1()
+        .border_color(pal.border)
+        .bg(pal.panel)
+        .child(div().text_subheading().child(entry_caption(entry)))
+        .when(!flyout, |panel| {
+            panel.child(
+                Button::new("ring-open-folder")
+                    .label(tr!("action_ring.open_folder"))
+                    .on_click(move |_, _, cx| navigate_folder(&view, Some(slot), cx)),
+            )
+        })
+        .when(can_switch_layout, |panel| {
+            panel.child(
+                Button::new("ring-folder-display")
+                    .label(if flyout {
+                        tr!("action_ring.use_full_ring")
+                    } else {
+                        tr!("action_ring.use_compact_flyout")
+                    })
+                    .on_click(move |_, _, cx| {
+                        AppState::apply(cx, |state| state.set_ring_folder_flyout(slot, !flyout));
+                    }),
+            )
+        })
+        .child(
+            h_flex().gap_2().child(Input::new(&input)).child(
+                Button::new("ring-rename-folder")
+                    .label(tr!("action_ring.rename_folder"))
+                    .on_click(move |_, _, cx| {
+                        let value = input.read(cx).value();
+                        let name = value.trim();
+                        AppState::apply(cx, |state| {
+                            state.rename_action_ring_folder(
+                                slot,
+                                (!name.is_empty()).then(|| name.to_owned()),
+                            )
+                        });
+                    }),
+            ),
+        )
+        .child(icon_editor(
+            SlotTarget::parent(slot),
+            (
+                entry.default_icon().asset_path(),
+                if flyout {
+                    tr!("action_ring.use_flyout_icon")
+                } else {
+                    tr!("action_ring.use_folder_icon")
+                },
+            ),
+            entry.custom_icon(),
+            pal,
+        ))
+        .child(
+            Button::new("ring-clear-folder")
+                .label(tr!("action_ring.clear_slot"))
+                .on_click(move |_, _, cx| {
+                    AppState::apply(cx, |state| state.commit_action_ring_slot(slot, None));
+                }),
+        )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SlotTarget {
+    slot: ActionRingSlot,
+    folder: Option<ActionRingSlot>,
+    /// Which end was clicked and how many entries were present on that click.
+    insertion: Option<(bool, usize)>,
+}
+
+impl SlotTarget {
+    const fn parent(slot: ActionRingSlot) -> Self {
+        Self {
+            slot,
+            folder: None,
+            insertion: None,
+        }
+    }
+
+    const fn child(folder: ActionRingSlot, slot: ActionRingSlot) -> Self {
+        Self {
+            slot,
+            folder: Some(folder),
+            insertion: None,
+        }
+    }
+
+    fn add(folder: ActionRingSlot, before: bool, count: usize) -> Option<Self> {
+        let slot = *COMPACT_SLOTS.get(if before { 0 } else { count })?;
+        Some(Self {
+            slot,
+            folder: Some(folder),
+            insertion: Some((before, count)),
+        })
+    }
+
+    fn select(self, panel: &mut ActionRingPanel) {
+        panel.selected_slot = self.folder.unwrap_or(self.slot);
+        panel.selected_child = self.folder.map(|_| self);
+        panel.folder_name = None;
+    }
 }
 
 fn action_ring_editor_state(cx: &Context<ActionRingPanel>) -> (ActionRingConfig, ActionRingLayout) {
@@ -281,13 +481,15 @@ fn current_device_supports_haptics(cx: &Context<ActionRingPanel>) -> bool {
     })
 }
 
-const PREVIEW_SIZE: f32 = 320.0;
-const PREVIEW_RADIUS: f32 = 106.0;
-const PREVIEW_SLOT_SIZE: f32 = 50.0;
+const PREVIEW_SIZE: f32 = 352.0;
+const PREVIEW_RADIUS: f32 = 82.0;
+const PREVIEW_SLOT_SIZE: f32 = 42.0;
 
 fn ring_preview(
     layout: &ActionRingLayout,
     selected_slot: ActionRingSlot,
+    compact: Option<&ActionRingLayout>,
+    selected_child: Option<SlotTarget>,
     view: &Entity<ActionRingPanel>,
     pal: Palette,
 ) -> impl IntoElement {
@@ -298,9 +500,15 @@ fn ring_preview(
         .child(
             div()
                 .absolute()
-                .left(px(24.0))
-                .top(px(24.0))
-                .size(px(PREVIEW_SIZE - 48.0))
+                .left(px(PREVIEW_SIZE / 2.0
+                    - PREVIEW_RADIUS
+                    - PREVIEW_SLOT_SIZE / 2.0
+                    - 8.0))
+                .top(px(PREVIEW_SIZE / 2.0
+                    - PREVIEW_RADIUS
+                    - PREVIEW_SLOT_SIZE / 2.0
+                    - 8.0))
+                .size(px(2.0 * PREVIEW_RADIUS + PREVIEW_SLOT_SIZE + 16.0))
                 .rounded_full()
                 .border_1()
                 .border_color(pal.border)
@@ -328,38 +536,106 @@ fn ring_preview(
         )
         .children(ActionRingSlot::ALL.into_iter().map(|slot| {
             slot_button(
-                slot,
+                SlotTarget::parent(slot),
+                slot.placement(PREVIEW_SIZE, PREVIEW_RADIUS, PREVIEW_SLOT_SIZE),
                 layout.slots.get(&slot),
                 selected_slot == slot,
                 view,
                 pal,
             )
         }))
+        .when_some(compact, |preview, layout| {
+            let count = layout.slots.len();
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a flyout has at most twelve actions"
+            )]
+            let count_f32 = count as f32;
+            let position = |index| {
+                let (x, y) = compact_slot_centre(
+                    selected_slot,
+                    index,
+                    count_f32.max(1.0),
+                    PREVIEW_RADIUS,
+                    PREVIEW_SLOT_SIZE,
+                );
+                let origin = (PREVIEW_SIZE - PREVIEW_SLOT_SIZE) / 2.0;
+                (origin + x, origin + y)
+            };
+            let actions = layout
+                .slots
+                .iter()
+                .enumerate()
+                .map(|(index, (&slot, entry))| {
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "a flyout has at most twelve actions"
+                    )]
+                    let index = index as f32;
+                    let target = SlotTarget::child(selected_slot, slot);
+                    slot_button(
+                        target,
+                        position(index),
+                        Some(entry),
+                        selected_child == Some(target),
+                        view,
+                        pal,
+                    )
+                });
+            let add = [true, false].into_iter().filter_map(|before| {
+                if count == COMPACT_SLOTS.len()
+                    || (before && (count == 0 || count + 1 == COMPACT_SLOTS.len()))
+                {
+                    return None;
+                }
+                let target = SlotTarget::add(selected_slot, before, count)?;
+                let offset = if before { -1.0 } else { count_f32 };
+                let placement = position(offset);
+                Some(slot_button(
+                    target,
+                    placement,
+                    None,
+                    selected_child == Some(target),
+                    view,
+                    pal,
+                ))
+            });
+            preview.children(actions.chain(add))
+        })
 }
 
 fn slot_button(
-    slot: ActionRingSlot,
+    target: SlotTarget,
+    (left, top): (f32, f32),
     entry: Option<&ActionRingEntry>,
     selected: bool,
     view: &Entity<ActionRingPanel>,
     pal: Palette,
 ) -> impl IntoElement {
+    let slot = target.slot;
     let index = slot.index();
-    let (left, top) = slot.placement(PREVIEW_SIZE, PREVIEW_RADIUS, PREVIEW_SLOT_SIZE);
+    let id = match (target.folder, target.insertion) {
+        (_, Some((true, _))) => "action-ring-add-before",
+        (_, Some((false, _))) => "action-ring-add-after",
+        (Some(_), None) => "action-ring-child",
+        (None, None) => "action-ring-slot",
+    };
     let label = entry.map_or_else(
         || tr!("action_ring.empty_slot").to_string(),
         |entry| entry_caption(entry).to_string(),
     );
-    let icon_path = entry.map(|entry| {
-        entry.custom_icon().map_or_else(
-            || action_icon_path(entry.action()),
-            ActionRingIcon::asset_path,
-        )
-    });
+    let icon_path = entry.map(|entry| entry.icon().asset_path());
     let accessible_label = label.clone();
     let selected_view = view.clone();
 
-    BaseButton::new(("action-ring-slot", index))
+    BaseButton::new((id, index))
+        .debug_selector(move || {
+            if target.insertion.is_some() {
+                id.to_owned()
+            } else {
+                format!("{id}-{slot:?}")
+            }
+        })
         .selected(selected)
         .absolute()
         .left(px(left))
@@ -402,7 +678,7 @@ fn slot_button(
         .focus_visible(move |style| style.focus_ring(pal))
         .on_click(move |_, _, cx| {
             selected_view.update(cx, |panel, cx| {
-                panel.selected_slot = slot;
+                target.select(panel);
                 cx.notify();
             });
         })
@@ -413,7 +689,11 @@ fn slot_button(
 /// for the ring itself, so the preview and the ring name a slot alike.
 fn entry_caption(entry: &ActionRingEntry) -> SharedString {
     entry.custom_label().map_or_else(
-        || localized_action_label(entry.action()),
+        || {
+            entry
+                .action()
+                .map_or_else(|| tr!("action_ring.folder"), localized_action_label)
+        },
         |label| SharedString::from(label.to_owned()),
     )
 }

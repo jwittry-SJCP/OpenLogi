@@ -748,6 +748,18 @@ camera_light_auto_description = "Herhangi bir kamera kullanılırken bu ışık 
 keyboard_lighting_description = "OpenLogi çalıştığı sürece uygulanır, klavyeye kaydedilmez."
 
 [action_ring]
+folder_creation = "Actions Ring Folder"
+add_folder = "Add Folder"
+use_folder_icon = "Use Folder Icon"
+use_flyout_icon = "Use Flyout Icon"
+compact_flyout = "Compact Flyout"
+use_full_ring = "Convert to Folder"
+add_compact_flyout = "Add Compact Flyout"
+flyout_action = "Flyout Action %{number}"
+use_compact_flyout = "Convert to Flyout"
+open_folder = "Open Folder"
+rename_folder = "Rename"
+parent_ring = "Back to Parent Ring"
 actions_ring = "Eylem Halkası"
 action_ring_description = "İmlecin çevresinde gösterilen sekiz eylemi yapılandırın."
 enable_ring = "Show ring on button press"

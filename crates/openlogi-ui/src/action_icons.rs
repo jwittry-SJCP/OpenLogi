@@ -54,6 +54,7 @@ const ACTION_ICONS: &[(&str, &[u8])] = &[
     ("action-icons/circle-arrow-right.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/circle-arrow-right.svg"))),
     ("action-icons/circle-dot.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/circle-dot.svg"))),
     ("action-icons/clipboard-paste.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/clipboard-paste.svg"))),
+    ("action-icons/compact-flyout.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/compact-flyout.svg"))),
     ("action-icons/copy.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/copy.svg"))),
     ("action-icons/dot.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/dot.svg"))),
     ("action-icons/file.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/action-icons/file.svg"))),
@@ -184,7 +185,10 @@ mod tests {
 
     #[test]
     fn every_ring_gallery_icon_is_embedded() {
-        for icon in ActionRingIcon::ALL {
+        for icon in ActionRingIcon::ALL
+            .into_iter()
+            .chain([ActionRingIcon::CompactFlyout])
+        {
             assert!(
                 embedded_icon(icon.asset_path()).is_some(),
                 "missing embedded asset for {icon:?}"

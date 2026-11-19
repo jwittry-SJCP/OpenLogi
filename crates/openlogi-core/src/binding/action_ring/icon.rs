@@ -122,6 +122,8 @@ pub enum ActionRingIcon {
     Channel2,
     /// Easy-Switch channel 3 glyph.
     Channel3,
+    /// The default glyph for a compact flyout.
+    CompactFlyout,
 }
 
 impl ActionRingIcon {
@@ -189,6 +191,7 @@ impl ActionRingIcon {
             Self::Channel1 => "action-icons/square-1.svg",
             Self::Channel2 => "action-icons/square-2.svg",
             Self::Channel3 => "action-icons/square-3.svg",
+            Self::CompactFlyout => "action-icons/compact-flyout.svg",
         }
     }
 
@@ -312,6 +315,7 @@ impl ActionRingIcon {
             Self::Channel1 => "actions.easy_switch_channel_1",
             Self::Channel2 => "actions.easy_switch_channel_2",
             Self::Channel3 => "actions.easy_switch_channel_3",
+            Self::CompactFlyout => "action_ring.compact_flyout",
         }
     }
 }

@@ -14,7 +14,7 @@ use openlogi_core::binding::{
     RingAction,
 };
 
-use super::action_icons::action_icon_path;
+use super::{SlotTarget, action_icons::action_icon_path};
 use crate::features::binding_editor::editor_section;
 use crate::features::keyboard::editors::PowerUserKind;
 use crate::state::AppState;
@@ -36,15 +36,16 @@ pub(super) struct PowerUserInputs {
 }
 
 pub(super) fn action_library(
-    slot: ActionRingSlot,
-    current: Option<&ActionRingEntry>,
+    (slot, current): (SlotTarget, Option<&ActionRingEntry>),
+    can_add_folders: bool,
     application_input: &Entity<InputState>,
     shortcut_input: &Entity<InputState>,
     power_user: &PowerUserInputs,
     library_scroll: &ScrollHandle,
     pal: Palette,
 ) -> impl IntoElement {
-    let current_action = current.map(ActionRingEntry::action).cloned();
+    let catalog = ring_catalog();
+    let current_action = current.and_then(ActionRingEntry::action).cloned();
     let current_label = current_action
         .as_ref()
         .map_or_else(|| tr!("action_ring.empty_slot"), localized_action_label);
@@ -71,7 +72,11 @@ pub(super) fn action_library(
                     h_flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_subheading().child(slot_title(slot)))
+                        .child(div().text_subheading().child(if slot.folder.is_some() {
+                            tr!("action_ring.flyout_action", number = slot.slot.index() + 1)
+                        } else {
+                            slot_title(slot.slot)
+                        }))
                         .child(
                             Button::new("ring-clear-slot")
                                 .compact()
@@ -91,39 +96,39 @@ pub(super) fn action_library(
                 .p_1p5()
                 .pb(px(LIBRARY_FADE_H))
                 .when_some(current_action.as_ref(), |library, action| {
-                    library.child(icon_editor(
-                        slot,
-                        action,
-                        current.and_then(ActionRingEntry::custom_icon),
-                        pal,
-                    ))
+                        library.child(icon_editor(
+                            slot,
+                            (action_icon_path(action), tr!("action_ring.use_action_icon")),
+                            current.and_then(ActionRingEntry::custom_icon),
+                            pal,
+                        ))
+                })
+                .when(can_add_folders && slot.folder.is_none(), |library| {
+                    library.child(folder_creation_actions(slot.slot, pal))
                 })
                 .child(path_editor(slot, application_input, pal))
-                .child(text_action_editor(
-                    slot,
-                    PowerUserKind::TypeText,
-                    &power_user.type_text,
-                    pal,
-                ))
-                // RunAppleScript has no execution path outside macOS
-                // (`openlogi-inject`'s Linux/Windows backends only log a
-                // warning and do nothing) — hide the editor there instead of
-                // letting a binding be saved that silently never fires.
-                .when(cfg!(target_os = "macos"), |library| {
-                    library.child(text_action_editor(
-                        slot,
-                        PowerUserKind::RunAppleScript,
-                        &power_user.applescript,
-                        pal,
-                    ))
-                })
-                .child(text_action_editor(
-                    slot,
-                    PowerUserKind::RunShellCommand,
-                    &power_user.shell_command,
-                    pal,
-                ))
-                .children(action_sections(slot, current_action.as_ref(), pal)),
+                        .child(text_action_editor(
+                            slot,
+                            PowerUserKind::TypeText,
+                            &power_user.type_text,
+                            pal,
+                        ))
+                        // Shell actions and AppleScript use separate platform paths.
+                        .when(cfg!(target_os = "macos"), |library| {
+                            library.child(text_action_editor(
+                                slot,
+                                PowerUserKind::RunAppleScript,
+                                &power_user.applescript,
+                                pal,
+                            ))
+                        })
+                        .child(text_action_editor(
+                            slot,
+                            PowerUserKind::RunShellCommand,
+                            &power_user.shell_command,
+                            pal,
+                        ))
+                .children(action_sections(slot, current_action.as_ref(), catalog, pal)),
             library_scroll,
             pal,
         ))
@@ -140,6 +145,33 @@ pub(super) fn action_library(
         )
 }
 
+fn folder_creation_actions(slot: ActionRingSlot, pal: Palette) -> impl IntoElement {
+    v_flex()
+        .debug_selector(|| "ring-folder-create-actions".into())
+        .child(editor_section(tr!("action_ring.folder_creation"), pal))
+        .children(
+            [
+                (
+                    "ring-create-folder",
+                    tr!("action_ring.add_folder"),
+                    ActionRingIcon::Folder.asset_path(),
+                    false,
+                ),
+                (
+                    "ring-create-flyout",
+                    tr!("action_ring.add_compact_flyout"),
+                    ActionRingIcon::CompactFlyout.asset_path(),
+                    true,
+                ),
+            ]
+            .map(move |(id, label, icon, compact)| {
+                action_row(id, label, icon, false, pal).on_click(move |_, _, cx| {
+                    AppState::apply(cx, |state| state.create_action_ring_folder(slot, compact));
+                })
+            }),
+        )
+}
+
 /// The card title: the ring position being edited.
 fn slot_title(slot: ActionRingSlot) -> gpui::SharedString {
     match slot {
@@ -151,6 +183,7 @@ fn slot_title(slot: ActionRingSlot) -> gpui::SharedString {
         ActionRingSlot::BottomLeft => tr!("action_ring.bottom_left_slot"),
         ActionRingSlot::Left => tr!("action_ring.left_slot"),
         ActionRingSlot::TopLeft => tr!("action_ring.top_left_slot"),
+        slot => tr!("action_ring.flyout_action", number = slot.index() + 1),
     }
 }
 
@@ -190,23 +223,23 @@ fn action_rows_scroller(
         .vertical_scrollbar(scroll)
 }
 
-fn icon_editor(
-    slot: ActionRingSlot,
-    action: &Action,
+pub(super) fn icon_editor(
+    slot: SlotTarget,
+    (default_path, default_label): (&'static str, gpui::SharedString),
     current: Option<ActionRingIcon>,
     pal: Palette,
 ) -> impl IntoElement {
-    let default_path = action_icon_path(action);
     let default = icon_button(
         "ring-default-icon",
         default_path,
-        tr!("action_ring.use_action_icon"),
+        default_label,
         current.is_none(),
         pal,
     )
     .on_click(move |_, _, cx| commit_icon(slot, None, cx));
 
     v_flex()
+        .debug_selector(|| "ring-icon-picker".into())
         .gap_1()
         .child(editor_section(tr!("action_ring.icon"), pal))
         .child(
@@ -243,11 +276,7 @@ fn icon_button(
         .tooltip(label)
 }
 
-fn shortcut_editor(
-    slot: ActionRingSlot,
-    input: &Entity<InputState>,
-    pal: Palette,
-) -> impl IntoElement {
+fn shortcut_editor(slot: SlotTarget, input: &Entity<InputState>, pal: Palette) -> impl IntoElement {
     let submit_input = input.clone();
     v_flex()
         .debug_selector(|| "ring-custom-shortcut".into())
@@ -276,7 +305,7 @@ fn shortcut_editor(
         )
 }
 
-fn path_editor(slot: ActionRingSlot, input: &Entity<InputState>, pal: Palette) -> impl IntoElement {
+fn path_editor(slot: SlotTarget, input: &Entity<InputState>, pal: Palette) -> impl IntoElement {
     let submit_input = input.clone();
     v_flex()
         .gap_1()
@@ -311,7 +340,7 @@ fn path_editor(slot: ActionRingSlot, input: &Entity<InputState>, pal: Palette) -
 /// RunShellCommand — each is one text field committed as its own [`Action`]
 /// variant, the same shape as [`shortcut_editor`]/[`path_editor`].
 fn text_action_editor(
-    slot: ActionRingSlot,
+    slot: SlotTarget,
     kind: PowerUserKind,
     input: &Entity<InputState>,
     pal: Palette,
@@ -359,12 +388,12 @@ fn power_user_action(kind: PowerUserKind, text: String) -> Option<Action> {
 }
 
 fn action_sections(
-    slot: ActionRingSlot,
+    slot: SlotTarget,
     current: Option<&Action>,
+    catalog: Vec<(Category, Vec<Action>)>,
     pal: Palette,
 ) -> impl Iterator<Item = impl IntoElement> {
-    let mut index = 0usize;
-    ring_catalog().into_iter().map(move |(category, actions)| {
+    catalog.into_iter().map(move |(category, actions)| {
         v_flex()
             .child(editor_section(
                 rust_i18n::t!(category.translation_key()),
@@ -375,37 +404,45 @@ fn action_sections(
                 let action_to_commit = action.clone();
                 let label = localized_action_label(&action);
                 let icon_path = action_icon_path(&action);
-                let row_index = index;
-                index += 1;
-                MenuRow::new(("ring-action", row_index))
-                    .role(Role::MenuItem)
-                    .aria_label(label.clone())
-                    .selected(selected)
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                svg()
-                                    .path(icon_path)
-                                    .size_4()
-                                    .flex_none()
-                                    .text_color(pal.text_muted),
-                            )
-                            .child(label),
-                    )
-                    .when(selected, |row| {
-                        row.child(
-                            Icon::new(IconName::Check)
-                                .size_3()
-                                .text_color(rgb(theme::ACCENT_BLUE)),
-                        )
-                    })
-                    .on_click(move |_, _, cx| {
-                        commit_action(slot, action_to_commit.clone(), cx);
-                    })
+                let id: gpui::SharedString = format!("ring-action-{}", action.label()).into();
+                action_row(id, label, icon_path, selected, pal).on_click(move |_, _, cx| {
+                    commit_action(slot, action_to_commit.clone(), cx);
+                })
             }))
     })
+}
+
+fn action_row(
+    id: impl Into<gpui::ElementId>,
+    label: gpui::SharedString,
+    icon_path: &'static str,
+    selected: bool,
+    pal: Palette,
+) -> MenuRow {
+    MenuRow::new(id)
+        .role(Role::MenuItem)
+        .aria_label(label.clone())
+        .selected(selected)
+        .child(
+            h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    svg()
+                        .path(icon_path)
+                        .size_4()
+                        .flex_none()
+                        .text_color(pal.text_muted),
+                )
+                .child(label),
+        )
+        .when(selected, |row| {
+            row.child(
+                Icon::new(IconName::Check)
+                    .size_3()
+                    .text_color(rgb(theme::ACCENT_BLUE)),
+            )
+        })
 }
 
 fn ring_catalog() -> Vec<(Category, Vec<Action>)> {
@@ -427,19 +464,35 @@ fn ring_catalog() -> Vec<(Category, Vec<Action>)> {
     sections
 }
 
-fn commit_action(slot: ActionRingSlot, action: Action, cx: &mut gpui::App) {
+fn commit_action(slot: SlotTarget, action: Action, cx: &mut gpui::App) {
     let Ok(action) = RingAction::new(action) else {
         return;
     };
     commit_slot(slot, Some(action), cx);
 }
 
-fn commit_slot(slot: ActionRingSlot, action: Option<RingAction>, cx: &mut gpui::App) {
-    AppState::apply(cx, |state| state.commit_action_ring_slot(slot, action));
+fn commit_slot(slot: SlotTarget, action: Option<RingAction>, cx: &mut gpui::App) {
+    AppState::apply(cx, |state| match slot.folder {
+        Some(anchor) => state.edit_compact_ring(anchor, |layout| {
+            if let Some((before, count)) = slot.insertion {
+                if layout.slots.len() == count
+                    && let Some(action) = action
+                {
+                    layout.insert_compact_action(before, action);
+                }
+            } else {
+                layout.set_action(slot.slot, action);
+            }
+        }),
+        None => state.commit_action_ring_slot(slot.slot, action),
+    });
 }
 
-fn commit_icon(slot: ActionRingSlot, icon: Option<ActionRingIcon>, cx: &mut gpui::App) {
-    AppState::apply(cx, |state| state.commit_action_ring_icon(slot, icon));
+fn commit_icon(slot: SlotTarget, icon: Option<ActionRingIcon>, cx: &mut gpui::App) {
+    AppState::apply(cx, |state| match slot.folder {
+        Some(anchor) => state.edit_compact_ring(anchor, |layout| layout.set_icon(slot.slot, icon)),
+        None => state.commit_action_ring_icon(slot.slot, icon),
+    });
 }
 
 #[cfg(test)]
@@ -464,8 +517,11 @@ mod tests {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let cut = RingAction::new(Action::Cut).expect("Cut is a ring action");
             h_flex().w(px(640.0)).items_start().child(action_library(
-                ActionRingSlot::Top,
-                Some(&ActionRingEntry::new(cut)),
+                (
+                    SlotTarget::parent(ActionRingSlot::Top),
+                    Some(&ActionRingEntry::new(cut)),
+                ),
+                false,
                 &self.application,
                 &self.shortcut,
                 &self.power_user,

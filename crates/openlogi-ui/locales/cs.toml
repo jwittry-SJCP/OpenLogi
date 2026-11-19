@@ -748,6 +748,18 @@ camera_light_auto_description = "Zapnout světlo, když se používá některá 
 keyboard_lighting_description = "Platí, dokud běží OpenLogi; do klávesnice se neukládá."
 
 [action_ring]
+folder_creation = "Actions Ring Folder"
+add_folder = "Add Folder"
+use_folder_icon = "Use Folder Icon"
+use_flyout_icon = "Use Flyout Icon"
+compact_flyout = "Compact Flyout"
+use_full_ring = "Convert to Folder"
+add_compact_flyout = "Add Compact Flyout"
+flyout_action = "Flyout Action %{number}"
+use_compact_flyout = "Convert to Flyout"
+open_folder = "Open Folder"
+rename_folder = "Rename"
+parent_ring = "Back to Parent Ring"
 actions_ring = "Kruh akcí"
 action_ring_description = "Nastavte osm akcí zobrazených kolem ukazatele."
 enable_ring = "Show ring on button press"

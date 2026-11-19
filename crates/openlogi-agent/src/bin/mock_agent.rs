@@ -1596,6 +1596,15 @@ impl Agent for MockAgent {
         self.stop_flow().await;
     }
 
+    async fn action_ring_activate_parent(
+        self,
+        _: Context,
+        _session_id: u64,
+        _slot: ActionRingSlot,
+    ) -> Result<(), ActionRingCommandError> {
+        Err(ActionRingCommandError::SessionNotFound)
+    }
+
     async fn action_ring_unhover(
         self,
         _: Context,

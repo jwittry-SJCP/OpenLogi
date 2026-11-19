@@ -201,6 +201,7 @@ pub struct AppState {
     bindings: BindingState,
     /// Per-device Actions Ring profile open in this window's editor.
     action_ring_editing_apps: BTreeMap<String, String>,
+    action_ring_folder: Option<action_ring::FolderLocation>,
     /// DPI/SmartShift reads and the active pointer editor value.
     pointer: PointerState,
     /// Dedicated generation-fenced Disable Keys read owner.
@@ -319,6 +320,7 @@ impl AppState {
             devices: DeviceStore::new(device_list, current_device),
             bindings,
             action_ring_editing_apps: BTreeMap::new(),
+            action_ring_folder: None,
             pointer: PointerState::default(),
             lights: LightSession::default(),
             duration_steps: DurationSteps::Short,

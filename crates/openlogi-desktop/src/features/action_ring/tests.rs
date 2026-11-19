@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use gpui::{TestAppContext, VisualTestContext, size};
-use openlogi_core::binding::{Action, KeyCombo, RingAction};
+use openlogi_core::binding::{Action, ActionRingIcon, KeyCombo, RingAction};
 use openlogi_core::config::Config;
 
 use super::*;
@@ -115,4 +115,69 @@ fn the_ring_size_segment_sits_under_its_caption(cx: &mut TestAppContext) {
         segment.right() <= row.right(),
         "the segment {segment:?} stays inside the row {row:?}"
     );
+}
+
+#[gpui::test]
+fn compact_folder_edits_children_in_the_parent_preview(cx: &mut gpui::TestAppContext) {
+    use gpui::{Modifiers, MouseButton};
+    use openlogi_core::config::Config;
+
+    use crate::services::assets::AssetResolver;
+    use crate::services::i18n::LOCALE_LOCK;
+    use crate::state::{Sources, tests::direct_inventory};
+    use ActionRingSlot::{Top, TopLeft};
+
+    let _locale = LOCALE_LOCK.lock().unwrap();
+    cx.update(gpui_kit::init);
+    cx.update(theme::register_builtin_themes);
+    cx.update(|cx| {
+        let resolver = AssetResolver::new();
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        let inventory = direct_inventory([0xa3, 0x93, 0xca, 0xe0]);
+        let state = cx.new(|_| {
+            AppState::new(Sources {
+                inventories: &[inventory],
+                ..Sources::in_memory(Config::ephemeral(), &resolver, sender)
+            })
+        });
+        AppState::set_global(state, cx);
+        AppState::apply(cx, |state| state.commit_action_ring_slot(Top, None));
+        AppState::apply(cx, |state| state.create_action_ring_folder(Top, true));
+    });
+    let (_, visual) = cx.add_window_view(|window, cx| {
+        let panel = cx.new(ActionRingPanel::new);
+        gpui_kit::component::Root::new(panel, window, cx)
+    });
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(visual.debug_bounds("action-ring-add-after").is_some());
+    assert!(visual.debug_bounds("action-ring-add-before").is_none());
+    visual.update(|_, cx| {
+        AppState::apply(cx, |state| {
+            state.edit_compact_ring(Top, |layout| {
+                layout.insert_compact_action(false, RingAction::new(Action::Copy).unwrap());
+            })
+        });
+    });
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let parent = visual
+        .debug_bounds("action-ring-slot-Top")
+        .unwrap()
+        .center();
+    let first = visual
+        .debug_bounds("action-ring-child-Top")
+        .unwrap()
+        .center();
+    assert!(first.y < parent.y);
+    assert!((first.x - parent.x).abs() < px(1.0));
+    assert!(visual.debug_bounds("action-ring-add-before").is_some());
+
+    let empty = visual
+        .debug_bounds("action-ring-add-after")
+        .unwrap()
+        .center();
+    visual.simulate_mouse_down(empty, MouseButton::Left, Modifiers::none());
+    visual.simulate_mouse_up(empty, MouseButton::Left, Modifiers::none());
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(visual.debug_bounds("ring-slot-editor").is_some());
+    assert!(visual.debug_bounds("action-ring-slot-TopLeft").is_some());
 }

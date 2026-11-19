@@ -57,7 +57,7 @@ parsing its fields. A v10 file without the section loads with Flow disabled.
 
 ## Shape
 
-`schema_version` is required and currently `11`. `selected_device` is an
+`schema_version` is required and currently `15`. `selected_device` is an
 optional physical device key.
 
 `[app_settings]` contains application-wide preferences:
@@ -678,6 +678,19 @@ turning it on leaves gesture mode with the gesture map's `Click` as the press,
 and turning gestures back on restores the saved directions. The setting is per
 device, not per application: an app profile that gives the button its own
 action replaces the wheel hold in that application.
+
+An empty slot can be assigned a folder with a separate ring of shortcuts. Select a folder in the
+editor to change its icon or name. For a full folder, open its ring and use
+**Back to Parent Ring** to return.
+Selecting a folder in the on-screen ring opens its contents. A folder can use a
+compact flyout, selected on its parent slot or by adding `flyout = true` next
+to `folder`. Use **Add Compact Flyout** and fill positions from either end of
+the arc. The actions center on the parent slot until the arc fills a
+twelve-action outer circle.
+
+Schema 12 adds ring folders. Existing layouts load unchanged. Schema 13 adds the optional folder flyout setting. Schema 14 adds the four
+extra positions used by a full outer circle. Schema 15 adds custom folder
+icons.
 
 An Actions Ring entry wraps the action and may add an icon or literal label:
 

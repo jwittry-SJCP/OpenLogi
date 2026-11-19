@@ -1,5 +1,5 @@
 # OpenLogi configuration example. Copy only the sections you need.
-schema_version = 11
+schema_version = 15
 selected_device = "receiver:aabbccdd:slot:1"
 
 [app_settings]
@@ -103,6 +103,7 @@ haptics = true
 
 [devices."receiver:aabbccdd:slot:1".action_ring.default.slots]
 Top = { action = "Copy", icon = "Keyboard" }
+TopRight = { label = "Editing", folder = { slots = { Top = { action = "Undo" }, Right = { action = "Redo" } } } }
 Right = { action = { OpenApplication = { path = "/Applications/Safari.app", display_name = "Safari" } }, icon = "Applications" }
 Bottom = { action = "ShowDesktop", label = "Desktop" }
 

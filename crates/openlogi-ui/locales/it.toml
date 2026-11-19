@@ -748,6 +748,18 @@ camera_light_auto_description = "Accendi questa luce quando una fotocamera è in
 keyboard_lighting_description = "Applicata da OpenLogi mentre è in esecuzione, non salvata sulla tastiera."
 
 [action_ring]
+folder_creation = "Actions Ring Folder"
+add_folder = "Add Folder"
+use_folder_icon = "Use Folder Icon"
+use_flyout_icon = "Use Flyout Icon"
+compact_flyout = "Compact Flyout"
+use_full_ring = "Convert to Folder"
+add_compact_flyout = "Add Compact Flyout"
+flyout_action = "Flyout Action %{number}"
+use_compact_flyout = "Convert to Flyout"
+open_folder = "Open Folder"
+rename_folder = "Rename"
+parent_ring = "Back to Parent Ring"
 actions_ring = "Anello azioni"
 action_ring_description = "Configura le otto azioni mostrate attorno al puntatore."
 enable_ring = "Show ring on button press"
