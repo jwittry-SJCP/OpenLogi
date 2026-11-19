@@ -39,8 +39,7 @@ pub(super) fn action_library(
     (slot, current): (SlotTarget, Option<&ActionRingEntry>),
     search: Option<(&Entity<InputState>, &str)>,
     can_add_folders: bool,
-    application_input: &Entity<InputState>,
-    shortcut_input: &Entity<InputState>,
+    (application_input, shortcut_input): (&Entity<InputState>, &Entity<InputState>),
     power_user: &PowerUserInputs,
     library_scroll: &ScrollHandle,
     pal: Palette,
@@ -63,36 +62,7 @@ pub(super) fn action_library(
         .border_1()
         .border_color(pal.border)
         .bg(pal.panel)
-        .child(
-            v_flex()
-                .flex_none()
-                .gap_1()
-                .border_b_1()
-                .border_color(pal.border)
-                .p_3()
-                .child(
-                    h_flex()
-                        .items_center()
-                        .justify_between()
-                        .child(div().text_subheading().child(if slot.folder.is_some() {
-                            tr!("action_ring.flyout_action", number = slot.slot.index() + 1)
-                        } else {
-                            slot_title(slot.slot)
-                        }))
-                        .child(
-                            Button::new("ring-clear-slot")
-                                .compact()
-                                .label(tr!("action_ring.clear_slot"))
-                                .on_click(move |_, _, cx| commit_slot(slot, None, cx)),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_caption()
-                        .text_color(pal.text_muted)
-                        .child(current_label),
-                ),
-        )
+        .child(action_library_header(slot, current_label, pal))
         .when_some(search, |editor, (input, _)| {
             editor.child(
                 div()
@@ -162,6 +132,41 @@ pub(super) fn action_library(
                 .px_1p5()
                 .pb_2()
                 .child(shortcut_editor(slot, shortcut_input, pal)),
+        )
+}
+
+fn action_library_header(
+    slot: SlotTarget,
+    current_label: gpui::SharedString,
+    pal: Palette,
+) -> impl IntoElement {
+    v_flex()
+        .flex_none()
+        .gap_1()
+        .border_b_1()
+        .border_color(pal.border)
+        .p_3()
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .child(div().text_subheading().child(if slot.folder.is_some() {
+                    tr!("action_ring.flyout_action", number = slot.slot.index() + 1)
+                } else {
+                    slot_title(slot.slot)
+                }))
+                .child(
+                    Button::new("ring-clear-slot")
+                        .compact()
+                        .label(tr!("action_ring.clear_slot"))
+                        .on_click(move |_, _, cx| commit_slot(slot, None, cx)),
+                ),
+        )
+        .child(
+            div()
+                .text_caption()
+                .text_color(pal.text_muted)
+                .child(current_label),
         )
 }
 
@@ -565,8 +570,7 @@ mod tests {
                 ),
                 None,
                 false,
-                &self.application,
-                &self.shortcut,
+                (&self.application, &self.shortcut),
                 &self.power_user,
                 &self.library_scroll,
                 theme::palette(cx),

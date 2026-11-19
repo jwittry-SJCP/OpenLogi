@@ -90,6 +90,19 @@ impl ActionRingPanel {
         input
     }
 
+    fn selected_flyout_slot(&self, compact: Option<&ActionRingLayout>) -> Option<SlotTarget> {
+        let layout = compact?;
+        let target = self.selected_child?;
+        let count = layout.slots.len();
+        match target.insertion {
+            Some((_, old_count)) if count == old_count => Some(target),
+            _ if layout.slots.contains_key(&target.slot) => {
+                Some(SlotTarget::child(self.selected_slot, target.slot))
+            }
+            _ => None,
+        }
+    }
+
     /// Get-or-create the three Power User text inputs, split out of `render`
     /// to keep it under clippy's line budget.
     fn power_user_inputs(
@@ -157,17 +170,7 @@ impl Render for ActionRingPanel {
                 children.normalize_compact_slots();
                 children
             });
-        let selected_child = compact.as_ref().and_then(|layout| {
-            let target = self.selected_child?;
-            let count = layout.slots.len();
-            match target.insertion {
-                Some((_, old_count)) if count == old_count => Some(target),
-                _ if layout.slots.contains_key(&target.slot) => {
-                    Some(SlotTarget::child(selected, target.slot))
-                }
-                _ => None,
-            }
-        });
+        let selected_child = self.selected_flyout_slot(compact.as_ref());
         let folder_editor = entry
             .filter(|entry| entry.folder().is_some() && selected_child.is_none())
             .map(|entry| {
@@ -175,47 +178,14 @@ impl Render for ActionRingPanel {
                     editor_input(&mut self.folder_name, tr!("action_ring.folder"), window, cx);
                 folder_controls(selected, entry, input, &view, pal)
             });
-        let library_target = selected_child.map_or_else(
-            || {
-                entry
-                    .and_then(ActionRingEntry::folder)
-                    .is_none()
-                    .then_some((SlotTarget::parent(selected), entry))
-            },
-            |child| {
-                Some((
-                    child,
-                    compact.as_ref().and_then(|layout| {
-                        child
-                            .insertion
-                            .is_none()
-                            .then(|| layout.slots.get(&child.slot))
-                            .flatten()
-                    }),
-                ))
-            },
-        );
+        let library_target = slot_library_target(selected, entry, compact.as_ref(), selected_child);
 
         v_flex()
             .w_full()
             .gap_4()
             .tab_group()
             .track_focus(&self.focus_handle)
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_subheading()
-                            .child(tr!("action_ring.actions_ring")),
-                    )
-                    .child(
-                        div()
-                            .text_caption()
-                            .text_color(pal.text_muted)
-                            .child(tr!("action_ring.action_ring_description")),
-                    ),
-            )
+            .child(ring_heading(pal))
             .when(in_folder, |panel| {
                 let view = view.clone();
                 panel.child(
@@ -258,8 +228,7 @@ impl Render for ActionRingPanel {
                             target,
                             Some((&search, query.as_ref())),
                             !in_folder,
-                            &application_input,
-                            &shortcut_input,
+                            (&application_input, &shortcut_input),
                             &power_user,
                             &self.library_scroll,
                             pal,
@@ -270,6 +239,50 @@ impl Render for ActionRingPanel {
 }
 
 /// The settings that apply to the whole ring.
+fn ring_heading(pal: Palette) -> impl IntoElement {
+    v_flex()
+        .gap_1()
+        .child(
+            div()
+                .text_subheading()
+                .child(tr!("action_ring.actions_ring")),
+        )
+        .child(
+            div()
+                .text_caption()
+                .text_color(pal.text_muted)
+                .child(tr!("action_ring.action_ring_description")),
+        )
+}
+
+fn slot_library_target<'a>(
+    selected: ActionRingSlot,
+    entry: Option<&'a ActionRingEntry>,
+    compact: Option<&'a ActionRingLayout>,
+    selected_child: Option<SlotTarget>,
+) -> Option<(SlotTarget, Option<&'a ActionRingEntry>)> {
+    selected_child.map_or_else(
+        || {
+            entry
+                .and_then(ActionRingEntry::folder)
+                .is_none()
+                .then_some((SlotTarget::parent(selected), entry))
+        },
+        |child| {
+            Some((
+                child,
+                compact.and_then(|layout| {
+                    child
+                        .insertion
+                        .is_none()
+                        .then(|| layout.slots.get(&child.slot))
+                        .flatten()
+                }),
+            ))
+        },
+    )
+}
+
 fn ring_settings(
     ring: &ActionRingConfig,
     haptics_supported: bool,
@@ -629,63 +642,79 @@ fn ring_preview(
             )
         }))
         .when_some(compact, |preview, layout| {
-            let count = layout.slots.len();
+            preview.children(flyout_buttons(
+                layout,
+                selected_slot,
+                selected_child,
+                view,
+                pal,
+            ))
+        })
+}
+
+fn flyout_buttons(
+    layout: &ActionRingLayout,
+    selected_slot: ActionRingSlot,
+    selected_child: Option<SlotTarget>,
+    view: &Entity<ActionRingPanel>,
+    pal: Palette,
+) -> impl Iterator<Item = impl IntoElement> {
+    let count = layout.slots.len();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a flyout has at most twelve actions"
+    )]
+    let count_f32 = count as f32;
+    let position = move |index| {
+        let (x, y) = compact_slot_centre(
+            selected_slot,
+            index,
+            count_f32.max(1.0),
+            PREVIEW_RADIUS,
+            PREVIEW_SLOT_SIZE,
+        );
+        let origin = (PREVIEW_SIZE - PREVIEW_SLOT_SIZE) / 2.0;
+        (origin + x, origin + y)
+    };
+    let actions = layout
+        .slots
+        .iter()
+        .enumerate()
+        .map(move |(index, (&slot, entry))| {
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "a flyout has at most twelve actions"
             )]
-            let count_f32 = count as f32;
-            let position = |index| {
-                let (x, y) = compact_slot_centre(
-                    selected_slot,
-                    index,
-                    count_f32.max(1.0),
-                    PREVIEW_RADIUS,
-                    PREVIEW_SLOT_SIZE,
-                );
-                let origin = (PREVIEW_SIZE - PREVIEW_SLOT_SIZE) / 2.0;
-                (origin + x, origin + y)
-            };
-            let actions = layout
-                .slots
-                .iter()
-                .enumerate()
-                .map(|(index, (&slot, entry))| {
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "a flyout has at most twelve actions"
-                    )]
-                    let index = index as f32;
-                    let target = SlotTarget::child(selected_slot, slot);
-                    slot_button(
-                        target,
-                        position(index),
-                        Some(entry),
-                        selected_child == Some(target),
-                        view,
-                        pal,
-                    )
-                });
-            let add = [true, false].into_iter().filter_map(|before| {
-                if count == COMPACT_SLOTS.len()
-                    || (before && (count == 0 || count + 1 == COMPACT_SLOTS.len()))
-                {
-                    return None;
-                }
-                let target = SlotTarget::add(selected_slot, before, count)?;
-                let offset = if before { -1.0 } else { count_f32 };
-                let placement = position(offset);
-                Some(slot_button(
-                    target,
-                    placement,
-                    None,
-                    selected_child == Some(target),
-                    view,
-                    pal,
-                ))
-            });
-            preview.children(actions.chain(add))
-        })
+            let index = index as f32;
+            let target = SlotTarget::child(selected_slot, slot);
+            slot_button(
+                target,
+                position(index),
+                Some(entry),
+                selected_child == Some(target),
+                view,
+                pal,
+            )
+        });
+    let add = [true, false].into_iter().filter_map(move |before| {
+        if count == COMPACT_SLOTS.len()
+            || (before && (count == 0 || count + 1 == COMPACT_SLOTS.len()))
+        {
+            return None;
+        }
+        let target = SlotTarget::add(selected_slot, before, count)?;
+        let offset = if before { -1.0 } else { count_f32 };
+        let placement = position(offset);
+        Some(slot_button(
+            target,
+            placement,
+            None,
+            selected_child == Some(target),
+            view,
+            pal,
+        ))
+    });
+    actions.chain(add)
 }
 
 fn slot_button(
@@ -761,32 +790,7 @@ fn slot_button(
             style.bg(theme::accent_tint()).border_color(theme::accent())
         })
         .on_drop(move |dragged: &DraggedRingSlot, _, cx| {
-            let from = dragged.target;
-            if from.folder != target.folder {
-                return;
-            }
-            AppState::apply(cx, |state| match target.folder {
-                Some(anchor) => state.edit_compact_ring(anchor, |layout| {
-                    if let Some((before, _)) = target.insertion {
-                        layout.move_compact_to_end(from.slot, before);
-                    } else {
-                        layout.move_slot(from.slot, slot);
-                    }
-                }),
-                None => state.move_action_ring_slot(from.slot, slot),
-            });
-            drop_view.update(cx, |panel, cx| {
-                let selection = if let (Some(anchor), Some((before, count))) =
-                    (target.folder, target.insertion)
-                {
-                    let index = if before { 0 } else { count.saturating_sub(1) };
-                    SlotTarget::child(anchor, COMPACT_SLOTS[index])
-                } else {
-                    target
-                };
-                selection.select(panel);
-                cx.notify();
-            });
+            drop_ring_slot(&drop_view, dragged.target, target, cx);
         })
         .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
         .when_some(icon_path, |button, path| {
@@ -807,6 +811,38 @@ fn slot_button(
                 cx.notify();
             });
         })
+}
+
+fn drop_ring_slot(
+    drop_view: &Entity<ActionRingPanel>,
+    from: SlotTarget,
+    target: SlotTarget,
+    cx: &mut App,
+) {
+    if from.folder != target.folder {
+        return;
+    }
+    AppState::apply(cx, |state| match target.folder {
+        Some(anchor) => state.edit_compact_ring(anchor, |layout| {
+            if let Some((before, _)) = target.insertion {
+                layout.move_compact_to_end(from.slot, before);
+            } else {
+                layout.move_slot(from.slot, target.slot);
+            }
+        }),
+        None => state.move_action_ring_slot(from.slot, target.slot),
+    });
+    drop_view.update(cx, |panel, cx| {
+        let selection =
+            if let (Some(anchor), Some((before, count))) = (target.folder, target.insertion) {
+                let index = if before { 0 } else { count.saturating_sub(1) };
+                SlotTarget::child(anchor, COMPACT_SLOTS[index])
+            } else {
+                target
+            };
+        selection.select(panel);
+        cx.notify();
+    });
 }
 
 /// The name a populated slot shows in the preview: the label the user gave it,
