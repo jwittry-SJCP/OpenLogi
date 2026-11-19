@@ -775,6 +775,49 @@ impl RingView {
 }
 
 impl RingView {
+    fn slider_element(&self, (left, top): (f32, f32), colors: RingColors) -> Div {
+        let window = self.geometry().window;
+        let fraction = self.slider.as_ref().map(ActiveSlider::fraction);
+        let unavailable = if self
+            .invocation
+            .slider
+            .is_some_and(|slider| slider.kind == SliderKind::DisplayBrightness)
+        {
+            "action_ring.brightness_unavailable"
+        } else {
+            "action_ring.volume_unavailable"
+        };
+        div()
+            .absolute()
+            .left(px(window / 2.0 + left))
+            .top(px(window / 2.0 + top))
+            .w(px(SLIDER_WIDTH))
+            .h(px(SLIDER_HEIGHT))
+            .bg(colors.cancel)
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when_some(fraction, |track, fraction| {
+                track.cursor_pointer().child(slider_fill(fraction)).child(
+                    div()
+                        .relative()
+                        .px(px(5.0))
+                        .rounded_full()
+                        .bg(colors.cancel)
+                        .text_color(colors.glyph)
+                        .text_size(px(12.0))
+                        .child(format!("{:.0}%", fraction * 100.0)),
+                )
+            })
+            .when(fraction.is_none(), |track| {
+                track
+                    .text_color(colors.glyph)
+                    .text_size(px(11.0))
+                    .child(rust_i18n::t!(unavailable).into_owned())
+            })
+    }
+
     /// The ring's square panel. Both placements anchor this same element.
     fn panel(&self, colors: RingColors) -> Div {
         let geometry = self.geometry();
@@ -821,7 +864,7 @@ impl RingView {
                 colors,
             )
         });
-        let anchor = flyout.or(self.invocation.slider.map(|slider| slider.slot));
+        let anchor = flyout.or_else(|| self.invocation.slider.map(|slider| slider.slot));
         let parent_slots = self.invocation.parent_slots.iter().map(|(&slot, entry)| {
             self.slot_element(slot, entry, anchor == Some(slot), None, colors)
         });
@@ -843,44 +886,8 @@ impl RingView {
             })
             .children(parent_slots)
             .children(slots)
-            .when_some(self.slider_origin(), |ring, (left, top)| {
-                let fraction = self.slider.as_ref().map(ActiveSlider::fraction);
-                ring.child(
-                    div()
-                        .absolute()
-                        .left(px(window / 2.0 + left))
-                        .top(px(window / 2.0 + top))
-                        .w(px(SLIDER_WIDTH))
-                        .h(px(SLIDER_HEIGHT))
-                        .bg(colors.cancel)
-                        .rounded_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when_some(fraction, |track, fraction| {
-                            track.cursor_pointer().child(slider_fill(fraction)).child(
-                                div()
-                                    .relative()
-                                    .px(px(5.0))
-                                    .rounded_full()
-                                    .bg(colors.cancel)
-                                    .text_color(colors.glyph)
-                                    .text_size(px(12.0))
-                                    .child(format!("{:.0}%", fraction * 100.0)),
-                            )
-                        })
-                        .when(fraction.is_none(), |track| {
-                            track.text_color(colors.glyph).text_size(px(11.0)).child(
-                                match self.invocation.slider.map(|slider| slider.kind) {
-                                    Some(SliderKind::DisplayBrightness) => {
-                                        rust_i18n::t!("action_ring.brightness_unavailable")
-                                    }
-                                    _ => rust_i18n::t!("action_ring.volume_unavailable"),
-                                }
-                                .into_owned(),
-                            )
-                        }),
-                )
+            .when_some(self.slider_origin(), |ring, origin| {
+                ring.child(self.slider_element(origin, colors))
             })
             .child(
                 div()
@@ -1049,6 +1056,46 @@ fn label_tail(horizontal: Grow, points_up: bool) -> impl IntoElement {
     })
 }
 
+impl RingView {
+    fn pointer_moved(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let heard_in = window.window_handle().window_id();
+        if matches!(self.placement, Placement::AtPointer) {
+            self.pointer.update(cx, |pointer, cx| {
+                if pointer.hear(heard_in, event.position) {
+                    cx.notify();
+                }
+            });
+        }
+        let geometry = self.geometry();
+        let Some((x, y)) = offset_from_centre(
+            self.placement,
+            geometry,
+            self.pointer.read(cx),
+            window,
+            event.position,
+        ) else {
+            return;
+        };
+        if let Some(origin) = self.slider_origin() {
+            self.slider_dragging &= event.pressed_button == Some(MouseButton::Left);
+            if self.slider_dragging {
+                self.set_slider_at(origin.0, x, cx);
+            }
+            return;
+        }
+        let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+        let aimed = target_slot(&filled, self.invocation.flyout, geometry, x, y);
+        if self.hover(aimed) {
+            cx.notify();
+        }
+    }
+}
+
 impl Render for RingView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session_id = self.invocation.session_id;
@@ -1093,38 +1140,7 @@ impl Render for RingView {
                     this.set_slider_at(origin.0, x, cx);
                 }
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                let heard_in = window.window_handle().window_id();
-                if matches!(this.placement, Placement::AtPointer) {
-                    this.pointer.update(cx, |pointer, cx| {
-                        if pointer.hear(heard_in, event.position) {
-                            cx.notify();
-                        }
-                    });
-                }
-                let geometry = this.geometry();
-                let Some((x, y)) = offset_from_centre(
-                    this.placement,
-                    geometry,
-                    this.pointer.read(cx),
-                    window,
-                    event.position,
-                ) else {
-                    return;
-                };
-                if let Some(origin) = this.slider_origin() {
-                    this.slider_dragging &= event.pressed_button == Some(MouseButton::Left);
-                    if this.slider_dragging {
-                        this.set_slider_at(origin.0, x, cx);
-                    }
-                    return;
-                }
-                let filled: Vec<_> = this.invocation.slots.keys().copied().collect();
-                let aimed = target_slot(&filled, this.invocation.flyout, geometry, x, y);
-                if this.hover(aimed) {
-                    cx.notify();
-                }
-            }))
+            .on_mouse_move(cx.listener(Self::pointer_moved))
             .children(panel)
             // The click is aimed from where it landed, even if the pointer
             // moved before the last frame could paint the highlight.
@@ -1485,7 +1501,7 @@ mod tests {
             language: None,
             size,
             flyout: None,
-            parent_slots: Default::default(),
+            parent_slots: std::collections::BTreeMap::new(),
             slider: None,
             slider_scroll: 0,
         }

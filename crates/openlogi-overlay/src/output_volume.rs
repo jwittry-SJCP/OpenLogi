@@ -68,7 +68,7 @@ mod macos {
                     &DEFAULT_OUTPUT,
                     0,
                     ptr::null(),
-                    &mut size,
+                    &raw mut size,
                     ptr::from_mut(&mut device).cast(),
                 )
             };
@@ -79,7 +79,7 @@ mod macos {
             let device = Self::default_device()?;
             let mut settable = 0u8;
             // SAFETY: The out pointer refers to a writable CoreAudio Boolean.
-            if unsafe { AudioObjectIsPropertySettable(device, &VOLUME, &mut settable) } != 0
+            if unsafe { AudioObjectIsPropertySettable(device, &VOLUME, &raw mut settable) } != 0
                 || settable == 0
             {
                 return None;
@@ -94,7 +94,7 @@ mod macos {
                     &VOLUME,
                     0,
                     ptr::null(),
-                    &mut size,
+                    &raw mut size,
                     ptr::from_mut(&mut fraction).cast(),
                 )
             };
@@ -106,8 +106,8 @@ mod macos {
             if Self::default_device() != Some(self.device) {
                 return false;
             }
-            // SAFETY: The property expects one Float32 between 0 and 1.
             let fraction = fraction.clamp(0.0, 1.0);
+            // SAFETY: The property expects one Float32 between 0 and 1.
             let status = unsafe {
                 AudioObjectSetPropertyData(
                     self.device,

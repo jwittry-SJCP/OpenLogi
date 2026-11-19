@@ -66,11 +66,10 @@ mod macos {
                 return None;
             }
             let api = api()?;
-            // SAFETY: The function only queries a display ID from CoreGraphics.
-            if api
-                .can_change
-                .is_some_and(|check| !unsafe { check(display) })
-            {
+            if api.can_change.is_some_and(|check| {
+                // SAFETY: The function only queries a display ID from CoreGraphics.
+                !unsafe { check(display) }
+            }) {
                 return None;
             }
             let mut fraction = 0.0;

@@ -125,10 +125,9 @@ impl Session {
             });
         if self.invocation.flyout.is_some() && slider.is_some() {
             self.invocation.slider = slider.filter(|target| {
-                !self
-                    .invocation
+                self.invocation
                     .slider
-                    .is_some_and(|current| current.slot == target.slot)
+                    .is_none_or(|current| current.slot != target.slot)
             });
             self.hovered = None;
             self.trigger_held = false;
