@@ -621,7 +621,7 @@ fn action_ring_types() {
         "3a0701",
     );
     assert_wire(&Action::VolumeControls, "41");
-    assert_wire(&Action::DisplayBrightness, "3e");
+    assert_wire(&Action::DisplayBrightness, "42");
     assert_wire(&HidppOperation::WriteFnLock, "0c");
     assert_wire(&HidppOperation::PlayHaptic, "0e");
     assert_wire(&HidppOperation::ReadFnLock, "0f");
