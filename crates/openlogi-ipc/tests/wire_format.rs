@@ -557,9 +557,20 @@ fn action_ring_types() {
             size: ActionRingSize::Large,
             flyout: Some(ActionRingSlot::TopRight),
             parent_slots: BTreeMap::new(),
+            slider: None,
+            slider_scroll: 0,
         },
         // Size and the optional flyout anchor follow the locale.
-        "2a0100034375740007000102667202010100",
+        "2a01000343757400070001026672020101000000",
+    );
+    assert_wire(&openlogi_core::action_ring::SliderKind::Volume, "00");
+    assert_wire(
+        &openlogi_ipc::ActionRingSlider {
+            slot: ActionRingSlot::TopRight,
+            kind: openlogi_core::action_ring::SliderKind::Volume,
+            scroll_origin: 7,
+        },
+        "01000e",
     );
     // The literal flag is one byte between label and icon.
     assert_wire(
@@ -605,6 +616,7 @@ fn action_ring_types() {
         },
         "3a0701",
     );
+    assert_wire(&Action::VolumeControls, "41");
     assert_wire(&Action::DisplayBrightness, "3e");
     assert_wire(&HidppOperation::WriteFnLock, "0c");
     assert_wire(&HidppOperation::PlayHaptic, "0e");

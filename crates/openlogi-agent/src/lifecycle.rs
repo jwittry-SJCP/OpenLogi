@@ -708,6 +708,7 @@ impl Running {
             self.inputs.scroll_input.clone(),
             Arc::clone(&self.event_monitor),
             self.shared.flow.input(),
+            Arc::clone(&self.inputs.ring),
         )
     }
 

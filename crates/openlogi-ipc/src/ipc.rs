@@ -194,7 +194,7 @@ pub use succession::Identity;
 ///      and `ActionRingIcon::{Channel1, Channel2, Channel3}` appended after
 ///      them — a device's move to another Easy-Switch channel, bound to a
 ///      button or an Actions Ring slot.
-/// v47: Actions Ring folders and compact flyouts, parent slots, extra outer slots, and the compact flyout icon.
+/// v47: Actions Ring folders and compact flyouts, parent slots, system sliders with wheel input, extra outer slots, and the compact flyout icon.
 pub const PROTOCOL_VERSION: u32 = 47;
 
 /// Environment variable through which the agent hands a supervised helper the
@@ -822,8 +822,19 @@ pub struct ActionRingPresentation {
     pub literal: bool,
     /// Fully resolved icon; the overlay does not need the executable action.
     pub icon: ActionRingIcon,
-    /// Activation opens another ring layout.
+    /// Activation opens another ring layout or a popout.
     pub opens_folder: bool,
+}
+
+/// An open slider and the wheel count at the instant it opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActionRingSlider {
+    /// Slot that anchors the slider.
+    pub slot: ActionRingSlot,
+    /// System setting this slider adjusts.
+    pub kind: openlogi_core::action_ring::SliderKind,
+    /// Session wheel count when the slider opened.
+    pub scroll_origin: i32,
 }
 
 /// One request for the overlay helper to display an Actions Ring.
@@ -842,6 +853,11 @@ pub struct ActionRingInvocation {
     pub flyout: Option<ActionRingSlot>,
     /// Parent slots retained on screen while a compact popout is open.
     pub parent_slots: BTreeMap<ActionRingSlot, ActionRingPresentation>,
+    /// Anchor and setting of the open system slider.
+    pub slider: Option<ActionRingSlider>,
+    /// Cumulative wheel adjustment in hundredths of a percent for this session.
+    /// The overlay subtracts its last observation so coalesced updates keep their input.
+    pub slider_scroll: i32,
 }
 
 /// The ring the overlay should be showing, stamped with its generation.

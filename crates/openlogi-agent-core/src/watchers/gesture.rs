@@ -44,6 +44,7 @@ use super::capture_session::{
 };
 use super::retry::RETRY_DELAY;
 use super::shutdown::{ManagerCompletion, WatcherHandle};
+use crate::action_ring::ActionRingManager;
 use crate::capture_plan::{
     CapturePublication, CaptureTarget, DeviceCapturePlan, DispatchPlan, SharedCapturePlans,
 };
@@ -59,6 +60,7 @@ pub struct GestureOutputs {
     actions: ActionDispatcher,
     scroll: ScrollInputHandle,
     hook_maps: SharedHookMaps,
+    ring: Arc<ActionRingManager>,
 }
 
 impl GestureOutputs {
@@ -68,11 +70,13 @@ impl GestureOutputs {
         actions: ActionDispatcher,
         scroll: ScrollInputHandle,
         hook_maps: SharedHookMaps,
+        ring: Arc<ActionRingManager>,
     ) -> Self {
         Self {
             actions,
             scroll,
             hook_maps,
+            ring,
         }
     }
 
@@ -97,6 +101,9 @@ impl GestureOutputs {
         delta: ScrollDelta,
         momentum: Option<MomentumParams>,
     ) {
+        if self.ring.try_scroll_slider(delta) {
+            return;
+        }
         if let Err(direct) = self.scroll.try_hidpp_wheel_scroll(session, delta, momentum) {
             // As for `post_scroll`: the wheel no longer scrolls by itself.
             // `direct` is already scaled by the wheel's sensitivity.

@@ -7,21 +7,22 @@
 //! the same panel is drawn at the pointer, in the one window that heard it last.
 
 use gpui::{
-    Bounds, BoxShadow, ClickEvent, Context, Div, Entity, Hsla, InteractiveElement, IntoElement,
-    MouseMoveEvent, ParentElement, PathBuilder, Pixels, Point, Render, SharedString, Size,
-    StatefulInteractiveElement as _, Styled, Subscription, Window, WindowAppearance,
-    WindowBackgroundAppearance, WindowId, WindowKind, WindowOptions, canvas, div,
-    linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, svg,
+    Bounds, BoxShadow, ClickEvent, ContentMask, Context, Div, Entity, Hsla, InteractiveElement,
+    IntoElement, MouseButton, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Point, Render,
+    SharedString, Size, StatefulInteractiveElement as _, Styled, Subscription, Window,
+    WindowAppearance, WindowBackgroundAppearance, WindowId, WindowKind, WindowOptions, canvas, div,
+    fill, linear_color_stop, linear_gradient, point, prelude::FluentBuilder as _, px, svg,
 };
-use openlogi_core::action_ring::compact_slot_centre;
+use openlogi_core::action_ring::{SliderKind, compact_slot_centre};
 use openlogi_core::binding::{Action, ActionRingSize, ActionRingSlot};
-use openlogi_ipc::{ActionRingInvocation, ActionRingPresentation};
+use openlogi_ipc::{ActionRingInvocation, ActionRingPresentation, ActionRingSlider};
 use openlogi_ui::action_icons::RING_CANCEL_ICON;
 use openlogi_ui::color::{self, neutral};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::ipc::OverlayCommand;
+use crate::output_volume::OutputVolume;
 use crate::session::{self, ClickAwaySession, ShowingRing};
 
 /// The ring's dimensions at one [`ActionRingSize`], in points.
@@ -264,6 +265,64 @@ fn target_slot(
     )
 }
 
+const SLIDER_WIDTH: f32 = 128.0;
+const SLIDER_HEIGHT: f32 = 32.0;
+const SLIDER_GAP: f32 = 8.0;
+
+fn slider_origin((x, y): (f32, f32), radius: f32, geometry: Geometry) -> (f32, f32) {
+    let margin = geometry.selected_slot / 2.0 + SLIDER_GAP;
+    let cap_radius = SLIDER_HEIGHT / 2.0;
+    let (pin, clearance) = match (Grow::away_from_centre(x), Grow::away_from_centre(y)) {
+        (Grow::Centred, _) => (SLIDER_WIDTH / 2.0, cap_radius + margin),
+        (_, Grow::Centred) => (SLIDER_WIDTH / 2.0, SLIDER_WIDTH / 2.0 + margin),
+        (horizontal, _) => {
+            let pin = if horizontal == Grow::Before {
+                SLIDER_WIDTH
+            } else {
+                0.0
+            };
+            // The cap center is one radius horizontally outward of the pinned
+            // tip. Solve for its distance from the slot center so the curved
+            // surfaces have the same gap as the cardinal placements.
+            let separation = margin + cap_radius;
+            let clearance =
+                (separation.powi(2) - (y * cap_radius).powi(2)).sqrt() - x.abs() * cap_radius;
+            (pin, clearance)
+        }
+    };
+    let distance = radius + clearance;
+    (x * distance - pin, y * distance - cap_radius)
+}
+
+fn slider_contains((left, top): (f32, f32), x: f32, y: f32) -> bool {
+    (left..=left + SLIDER_WIDTH).contains(&x) && (top..=top + SLIDER_HEIGHT).contains(&y)
+}
+
+/// Paint the complete rounded silhouette through a rectangular progress mask.
+fn slider_fill(fraction: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let mask = ContentMask {
+                bounds: Bounds::new(
+                    bounds.origin,
+                    Size::new(bounds.size.width * fraction, bounds.size.height),
+                ),
+            };
+            window.with_content_mask(Some(mask), |window| {
+                window.paint_quad(
+                    fill(bounds, color::accent_at_lightness(SELECTED_FILL_L))
+                        .corner_radii(bounds.size.height / 2.0),
+                );
+            });
+        },
+    )
+    .absolute()
+    .left_0()
+    .top_0()
+    .size_full()
+}
+
 /// Corners of the beam from the centre to a highlighted `slot`, in panel
 /// coordinates: the centre, the two points where its sides touch the grown
 /// slot, and the slot's own centre, which the slot covers.
@@ -466,10 +525,30 @@ impl RingPointer {
     }
 }
 
+enum ActiveSlider {
+    Volume(OutputVolume),
+}
+
+impl ActiveSlider {
+    fn open(slider: Option<ActionRingSlider>, _window: &Window, _cx: &gpui::App) -> Option<Self> {
+        match slider?.kind {
+            SliderKind::Volume => OutputVolume::read().map(Self::Volume),
+        }
+    }
+
+    fn fraction(&self) -> f32 {
+        match self {
+            Self::Volume(level) => level.fraction,
+        }
+    }
+}
+
 pub(crate) struct RingView {
     invocation: ActionRingInvocation,
     commands: mpsc::UnboundedSender<OverlayCommand>,
     hovered: Option<ActionRingSlot>,
+    slider: Option<ActiveSlider>,
+    slider_dragging: bool,
     placement: Placement,
     /// Shared by every window of this ring.
     pointer: Entity<RingPointer>,
@@ -504,6 +583,8 @@ impl RingView {
             cx.notify();
         });
         Self {
+            slider: ActiveSlider::open(invocation.slider, window, cx),
+            slider_dragging: false,
             invocation,
             commands,
             hovered: None,
@@ -520,10 +601,42 @@ impl RingView {
     }
 
     /// Update an open ring in place when its folder page changes.
-    pub(crate) fn replace_page(&mut self, invocation: ActionRingInvocation) {
+    pub(crate) fn replace_page(
+        &mut self,
+        invocation: ActionRingInvocation,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A coalesced update may open another slider and include wheel input
+        // for it. Use the new slider's starting count in that case.
+        let previous_scroll = if invocation.slider == self.invocation.slider {
+            self.invocation.slider_scroll
+        } else {
+            invocation
+                .slider
+                .map_or(invocation.slider_scroll, |slider| slider.scroll_origin)
+        };
+        let adjustment = invocation.slider_scroll.saturating_sub(previous_scroll);
+        self.invocation.slider_scroll = invocation.slider_scroll;
         if self.invocation != invocation {
+            self.slider = ActiveSlider::open(invocation.slider, window, cx);
+            self.slider_dragging = false;
             self.invocation = invocation;
             self.hovered = None;
+        }
+        self.apply_slider_scroll(adjustment, cx);
+    }
+
+    fn apply_slider_scroll(&mut self, adjustment: i32, cx: &mut Context<Self>) {
+        if adjustment != 0
+            && let Some(slider) = &self.slider
+        {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "bounded to one full slider range"
+            )]
+            let fraction = adjustment.clamp(-10_000, 10_000) as f32 / 10_000.0;
+            self.set_slider((slider.fraction() + fraction).clamp(0.0, 1.0), cx);
         }
     }
 
@@ -553,6 +666,41 @@ impl RingView {
     /// The dimensions this ring is drawn at.
     const fn geometry(&self) -> Geometry {
         Geometry::of(self.invocation.size)
+    }
+
+    fn slider_origin(&self) -> Option<(f32, f32)> {
+        let slot = self.invocation.slider?.slot;
+        let geometry = self.geometry();
+        if let Some(anchor) = self.invocation.flyout {
+            let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
+            let (_, x, y) =
+                flyout_centres(anchor, &filled, geometry).find(|&(key, _, _)| key == slot)?;
+            let radius = x.hypot(y);
+            Some(slider_origin((x / radius, y / radius), radius, geometry))
+        } else {
+            Some(slider_origin(slot.unit_offset(), geometry.radius, geometry))
+        }
+    }
+
+    fn set_slider_at(&mut self, left: f32, x: f32, cx: &mut Context<Self>) {
+        let fraction = (((x - left) / SLIDER_WIDTH).clamp(0.0, 1.0) * 100.0).round() / 100.0;
+        self.set_slider(fraction, cx);
+    }
+
+    fn set_slider(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        if let Some(slider) = &mut self.slider {
+            if (fraction - slider.fraction()).abs() < f32::EPSILON {
+                return;
+            }
+            let written = match slider {
+                ActiveSlider::Volume(level) => level.write(fraction),
+            };
+            if !written {
+                self.slider = None;
+                self.slider_dragging = false;
+            }
+            cx.notify();
+        }
     }
 
     fn slot_element(
@@ -652,12 +800,17 @@ impl RingView {
             self.slot_element(
                 slot,
                 entry,
-                self.hovered == Some(slot),
+                self.hovered == Some(slot)
+                    || (flyout.is_some()
+                        && self
+                            .invocation
+                            .slider
+                            .is_some_and(|slider| slider.slot == slot)),
                 centre(slot),
                 colors,
             )
         });
-        let anchor = flyout;
+        let anchor = flyout.or(self.invocation.slider.map(|slider| slider.slot));
         let parent_slots = self.invocation.parent_slots.iter().map(|(&slot, entry)| {
             self.slot_element(slot, entry, anchor == Some(slot), None, colors)
         });
@@ -679,6 +832,40 @@ impl RingView {
             })
             .children(parent_slots)
             .children(slots)
+            .when_some(self.slider_origin(), |ring, (left, top)| {
+                let fraction = self.slider.as_ref().map(ActiveSlider::fraction);
+                ring.child(
+                    div()
+                        .absolute()
+                        .left(px(window / 2.0 + left))
+                        .top(px(window / 2.0 + top))
+                        .w(px(SLIDER_WIDTH))
+                        .h(px(SLIDER_HEIGHT))
+                        .bg(colors.cancel)
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when_some(fraction, |track, fraction| {
+                            track.cursor_pointer().child(slider_fill(fraction)).child(
+                                div()
+                                    .relative()
+                                    .px(px(5.0))
+                                    .rounded_full()
+                                    .bg(colors.cancel)
+                                    .text_color(colors.glyph)
+                                    .text_size(px(12.0))
+                                    .child(format!("{:.0}%", fraction * 100.0)),
+                            )
+                        })
+                        .when(fraction.is_none(), |track| {
+                            track
+                                .text_color(colors.glyph)
+                                .text_size(px(11.0))
+                                .child(rust_i18n::t!("action_ring.volume_unavailable").into_owned())
+                        }),
+                )
+            })
             .child(
                 div()
                     .id("ring-cancel")
@@ -874,11 +1061,22 @@ impl Render for RingView {
             .collect();
         let filled: Vec<_> = self.invocation.slots.keys().copied().collect();
         let flyout = self.invocation.flyout;
+        let slider_origin = self.slider_origin();
 
         div()
             .id("ring-root")
             .relative()
             .size_full()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                let Some(origin) = this.slider_origin() else { return };
+                let geometry = this.geometry();
+                if let Some((x, y)) = offset_from_centre(
+                    this.placement, geometry, this.pointer.read(cx), window, event.position,
+                ) && slider_contains(origin, x, y) {
+                    this.slider_dragging = true;
+                    this.set_slider_at(origin.0, x, cx);
+                }
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 let heard_in = window.window_handle().window_id();
                 if matches!(this.placement, Placement::AtPointer) {
@@ -898,6 +1096,13 @@ impl Render for RingView {
                 ) else {
                     return;
                 };
+                if let Some(origin) = this.slider_origin() {
+                    this.slider_dragging &= event.pressed_button == Some(MouseButton::Left);
+                    if this.slider_dragging {
+                        this.set_slider_at(origin.0, x, cx);
+                    }
+                    return;
+                }
                 let filled: Vec<_> = this.invocation.slots.keys().copied().collect();
                 let aimed = target_slot(&filled, this.invocation.flyout, geometry, x, y);
                 if this.hover(aimed) {
@@ -915,6 +1120,12 @@ impl Render for RingView {
                     window,
                     event.position(),
                 );
+                let dragged = std::mem::take(&mut this.slider_dragging);
+                if dragged || slider_origin.is_some_and(|origin| {
+                    offset.is_some_and(|(x, y)| slider_contains(origin, x, y))
+                }) {
+                    return;
+                }
                 let aimed = offset.and_then(|(x, y)| target_slot(&filled, flyout, geometry, x, y));
                 if aimed.is_none() && let Some((x, y)) = offset
                     && let Some(slot) = this.invocation.parent_slots.keys().copied().find(|slot| {
@@ -1167,6 +1378,12 @@ mod tests {
                         let edge = geometry.window / 2.0 - geometry.selected_slot / 2.0;
                         assert!(x.abs() < edge && y.abs() < edge);
                         assert_eq!(target_slot(keys, Some(anchor), geometry, x, y), Some(slot));
+                        let r = x.hypot(y);
+                        let (left, top) = slider_origin((x / r, y / r), r, geometry);
+                        let edge = geometry.window / 2.0;
+                        assert!(left >= -edge && left + SLIDER_WIDTH <= edge);
+                        assert!(top >= -edge && top + SLIDER_HEIGHT <= edge);
+                        assert_slider_placement((x / r, y / r), (left, top), r, geometry);
                     }
                     if count % 2 == 1 {
                         let (_, x, y) = centres[count / 2];
@@ -1187,6 +1404,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn volume_slider_fits_beside_each_slot_at_every_ring_size() {
+        for size in ActionRingSize::ALL {
+            let geometry = Geometry::of(size);
+            let edge = geometry.window / 2.0;
+            for slot in ActionRingSlot::ALL {
+                let (dx, dy) = slot.unit_offset();
+                let (left, top) = slider_origin((dx, dy), geometry.radius, geometry);
+                assert!(left >= -edge && left + SLIDER_WIDTH <= edge);
+                assert!(top >= -edge && top + SLIDER_HEIGHT <= edge);
+                let center_x = left + SLIDER_WIDTH / 2.0;
+                let center_y = top + SLIDER_HEIGHT / 2.0;
+                assert_slider_placement((dx, dy), (left, top), geometry.radius, geometry);
+                assert!(slider_contains((left, top), center_x, center_y));
+            }
+        }
+    }
+
+    fn assert_slider_placement(
+        (dx, dy): (f32, f32),
+        (left, top): (f32, f32),
+        radius: f32,
+        geometry: Geometry,
+    ) {
+        let pin_x = if dx.abs() <= 0.01 || dy.abs() <= 0.01 {
+            left + SLIDER_WIDTH / 2.0
+        } else if dx < 0.0 {
+            left + SLIDER_WIDTH
+        } else {
+            left
+        };
+        let pin_y = top + SLIDER_HEIGHT / 2.0;
+        assert!((pin_x * dy - pin_y * dx).abs() < 0.01);
+        assert!(pin_x * dx + pin_y * dy > radius);
+        let cap_radius = SLIDER_HEIGHT / 2.0;
+        let slot_x = radius * dx;
+        let slot_y = radius * dy;
+        let nearest_x = slot_x.clamp(left + cap_radius, left + SLIDER_WIDTH - cap_radius);
+        let gap =
+            (nearest_x - slot_x).hypot(pin_y - slot_y) - cap_radius - geometry.selected_slot / 2.0;
+        assert!((gap - SLIDER_GAP).abs() < 0.01, "gap was {gap}");
     }
 
     fn invocation() -> ActionRingInvocation {
@@ -1210,6 +1470,8 @@ mod tests {
             size,
             flyout: None,
             parent_slots: Default::default(),
+            slider: None,
+            slider_scroll: 0,
         }
     }
 

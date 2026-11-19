@@ -214,6 +214,7 @@ pub(crate) fn spawn_hidpp_watchers(
             inputs.dispatcher.clone(),
             inputs.scroll_input.clone(),
             shared.hook_maps.clone(),
+            Arc::clone(&inputs.ring),
         ),
     );
     let host_switch = watchers::host_switch::spawn(

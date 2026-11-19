@@ -10,13 +10,35 @@
 
 use std::time::Duration;
 
-use crate::binding::ActionRingSlot;
+use crate::binding::{Action, ActionRingSlot};
+use serde::{Deserialize, Serialize};
 
 /// How long the overlay keeps the ring on screen, counted from the moment its
 /// window opens. The overlay owns the display; the constant lives here so the
 /// session that has to outlive it is derived from it rather than kept in step
 /// by hand.
 pub const DISPLAY_LIFETIME: Duration = Duration::from_secs(15);
+
+/// The system setting controlled by an Actions Ring slider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SliderKind {
+    /// Default audio output level.
+    Volume,
+}
+
+impl SliderKind {
+    /// Which slider this action opens on the current platform.
+    #[must_use]
+    pub const fn for_action(action: &Action) -> Option<Self> {
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+        match action {
+            Action::VolumeControls => Some(Self::Volume),
+            _ => None,
+        }
+    }
+}
 
 /// Available positions at 30-degree intervals around the outer circle.
 pub const COMPACT_SLOTS: [ActionRingSlot; 12] = [

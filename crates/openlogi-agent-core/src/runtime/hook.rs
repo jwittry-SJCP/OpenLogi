@@ -28,6 +28,7 @@ use super::{
     ActionDispatchTarget, ActionDispatcher, PointerPress, PointerSelection, PressToken,
     log_bound_action,
 };
+use crate::action_ring::ActionRingManager;
 use crate::event_monitor::SharedEventMonitor;
 use crate::flow::FlowInput;
 pub(crate) use diverted::DivertedButtons;
@@ -660,6 +661,7 @@ pub fn start(
     scroll: ScrollInputHandle,
     monitor: SharedEventMonitor,
     flow: FlowInput,
+    ring: Arc<ActionRingManager>,
 ) -> Option<Hook> {
     if !Hook::has_accessibility() {
         warn!(
@@ -706,6 +708,9 @@ pub fn start(
                     from_trackpad,
                     device,
                 } => {
+                    if !from_trackpad && ring.try_scroll_slider(delta) {
+                        return queued_event_disposition(true);
+                    }
                     // No thumb-wheel binding is resolved here. A rebound thumb
                     // wheel is diverted over `0x2150`, so its HID++ capture
                     // session dispatches it and the wheel sends no native

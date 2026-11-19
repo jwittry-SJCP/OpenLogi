@@ -20,6 +20,7 @@ mod backlight;
 mod ipc;
 mod lock_key;
 mod notice;
+mod output_volume;
 mod platform;
 mod ring;
 mod session;
@@ -145,11 +146,11 @@ fn main() -> Result<()> {
                         .filter_map(|handle| handle.downcast::<RingView>())
                     {
                         updated |= ring
-                            .update(cx, |view, _window, cx| {
+                            .update(cx, |view, window, cx| {
                                 if view.session_id() != invocation.session_id {
                                     return false;
                                 }
-                                view.replace_page(invocation.clone());
+                                view.replace_page(invocation.clone(), window, cx);
                                 cx.notify();
                                 true
                             })

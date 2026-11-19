@@ -9,12 +9,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use openlogi_core::action_ring::DISPLAY_LIFETIME;
+use openlogi_core::action_ring::{DISPLAY_LIFETIME, SliderKind};
 use openlogi_core::binding::{Action, ActionRingLayout, ActionRingSize, ActionRingSlot};
+use openlogi_core::scroll::ScrollDelta;
 use openlogi_hid::DeviceRoute;
 use openlogi_ipc::{
-    ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, Generation, OBSERVE_HOLD,
-    RingObservation,
+    ActionRingCommandError, ActionRingInvocation, ActionRingPresentation, ActionRingSlider,
+    Generation, OBSERVE_HOLD, RingObservation,
 };
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -114,14 +115,38 @@ impl Session {
         let Some(entry) = self.layout.slots.get(&slot) else {
             return false;
         };
-        let Some(mut layout) = entry.folder().cloned() else {
-            return false;
+        let slider = entry
+            .action()
+            .and_then(SliderKind::for_action)
+            .map(|kind| ActionRingSlider {
+                slot,
+                kind,
+                scroll_origin: self.invocation.slider_scroll,
+            });
+        if self.invocation.flyout.is_some() && slider.is_some() {
+            self.invocation.slider = slider.filter(|target| {
+                !self
+                    .invocation
+                    .slider
+                    .is_some_and(|current| current.slot == target.slot)
+            });
+            self.hovered = None;
+            self.trigger_held = false;
+            return true;
+        }
+        let mut layout = match (entry.folder(), slider) {
+            (Some(layout), _) => layout.clone(),
+            (None, Some(_)) => ActionRingLayout {
+                slots: BTreeMap::new(),
+            },
+            (None, None) => return false,
         };
         let compact = entry.shows_flyout();
         if compact {
             layout.normalize_compact_slots();
             if self.invocation.flyout.is_some() {
                 self.invocation.slots = presentation(&layout);
+                self.invocation.slider = None;
                 self.layout = layout;
                 self.hovered = None;
                 self.trigger_held = false;
@@ -129,14 +154,15 @@ impl Session {
             }
         }
         self.invocation.flyout = compact.then_some(slot);
-        self.invocation.parent_slots = if compact {
+        self.invocation.slider = slider;
+        self.invocation.parent_slots = if self.invocation.flyout.is_some() || slider.is_some() {
             std::mem::take(&mut self.invocation.slots)
         } else {
             BTreeMap::new()
         };
         self.invocation.slots = presentation(&layout);
         let previous = std::mem::replace(&mut self.layout, layout);
-        self.parent = compact.then_some(previous);
+        self.parent = (self.invocation.flyout.is_some() || slider.is_some()).then_some(previous);
         self.hovered = None;
         self.trigger_held = false;
         true
@@ -167,7 +193,8 @@ fn presentation(layout: &ActionRingLayout) -> BTreeMap<ActionRingSlot, ActionRin
                     ),
                     literal: label.is_some(),
                     icon: entry.icon(),
-                    opens_folder: entry.folder().is_some(),
+                    opens_folder: entry.folder().is_some()
+                        || action.and_then(SliderKind::for_action).is_some(),
                 },
             )
         })
@@ -239,6 +266,8 @@ impl ActionRingManager {
             size: spec.size,
             flyout: None,
             parent_slots: BTreeMap::new(),
+            slider: None,
+            slider_scroll: 0,
         };
         let mut state = self.state();
         state.active = Some(Session {
@@ -322,6 +351,39 @@ impl ActionRingManager {
         });
     }
 
+    /// Route native and diverted wheel movement to the open slider.
+    /// The hook may call this on its input thread, so it never waits for the lock.
+    pub fn try_scroll_slider(&self, delta: ScrollDelta) -> bool {
+        let (x, y) = (delta.x(), delta.y());
+        if !delta.is_finite() || (x == 0.0 && y == 0.0) {
+            return false;
+        }
+        let dominant = if x.abs() > y.abs() { x } else { y };
+        let scale = match delta {
+            ScrollDelta::WheelTicks { .. } => 200.0,
+            ScrollDelta::Pixels { .. } => 10.0,
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "rounded and bounded to one full slider range"
+        )]
+        let change = (dominant * scale).round().clamp(-10_000.0, 10_000.0) as i32;
+        let Ok(mut state) = self.state.try_lock() else {
+            return false;
+        };
+        self.expire_and_publish(&mut state);
+        let Some(session) = state
+            .active
+            .as_mut()
+            .filter(|session| session.invocation.slider.is_some())
+        else {
+            return false;
+        };
+        session.invocation.slider_scroll = session.invocation.slider_scroll.saturating_add(change);
+        self.publish(&state);
+        true
+    }
+
     /// Record a changed highlighted slot. Repeated hover reports are ignored so
     /// one stationary pointer cannot flood the HID++ haptic queue.
     pub fn hover(
@@ -385,7 +447,8 @@ impl ActionRingManager {
         if let Some(parent) = session.parent.take() {
             session.layout = parent;
         }
-        let anchor = session.invocation.flyout.take();
+        let slider = session.invocation.slider.take().map(|slider| slider.slot);
+        let anchor = session.invocation.flyout.take().or(slider);
         session.invocation.slots = std::mem::take(&mut session.invocation.parent_slots);
         session.hovered = None;
         if anchor == Some(slot) {
@@ -648,6 +711,114 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(action.action, Action::MuteVolume);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn volume_action_opens_a_slider_beside_the_parent() {
+        let manager = ActionRingManager::default();
+        let mut spec = spec();
+        let slot = ActionRingSlot::Right;
+        spec.layout
+            .set_action(slot, Some(RingAction::new(Action::VolumeControls).unwrap()));
+        let root = manager.begin(spec);
+        assert!(root.slots[&slot].opens_folder);
+        assert!(manager.activate(root.session_id, slot).unwrap().is_none());
+        let opened = manager.observe(0).await.invocation.unwrap();
+        assert_eq!(
+            opened.slider.map(|slider| (slider.slot, slider.kind)),
+            Some((slot, SliderKind::Volume))
+        );
+        assert_eq!(opened.parent_slots, root.slots);
+        assert!(opened.slots.is_empty());
+        assert!(
+            manager
+                .activate_parent(root.session_id, slot)
+                .unwrap()
+                .is_none()
+        );
+        let collapsed = manager.observe(0).await.invocation.unwrap();
+        assert_eq!(collapsed, root);
+        assert!(manager.activate(root.session_id, slot).unwrap().is_none());
+        let sibling = manager
+            .activate_parent(root.session_id, ActionRingSlot::Top)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sibling.action, Action::Cut);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn volume_child_keeps_the_main_ring_and_all_flyout_actions_visible() {
+        use ActionRingSlot::{Left, Top, TopRight};
+        let manager = ActionRingManager::default();
+        let mut spec = spec();
+        spec.layout.set_action(Left, None);
+        spec.layout.add_folder(Left);
+        spec.layout.set_folder_flyout(Left, true);
+        let folder = spec.layout.folder_mut(Left).unwrap();
+        folder.insert_compact_action(false, RingAction::new(Action::VolumeControls).unwrap());
+        folder.insert_compact_action(false, RingAction::new(Action::Copy).unwrap());
+        let root = manager.begin(spec);
+        manager.activate(root.session_id, Left).unwrap();
+        let flyout = manager.observe(0).await.invocation.unwrap();
+
+        manager.activate(root.session_id, Top).unwrap();
+        let opened = manager.observe(0).await.invocation.unwrap();
+        assert_eq!(
+            opened.slider.map(|slider| (slider.slot, slider.kind)),
+            Some((Top, SliderKind::Volume))
+        );
+        assert_eq!(opened.flyout, Some(Left));
+        assert_eq!(opened.parent_slots, root.slots);
+        assert_eq!(opened.slots, flyout.slots);
+
+        manager.activate(root.session_id, Top).unwrap();
+        assert_eq!(manager.observe(0).await.invocation.unwrap(), flyout);
+        manager.activate(root.session_id, Top).unwrap();
+        let action = manager
+            .activate(root.session_id, TopRight)
+            .unwrap()
+            .unwrap();
+        assert_eq!(action.action, Action::Copy);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn both_wheels_adjust_volume_only_while_the_slider_is_open() {
+        use ActionRingSlot::{Left, Top};
+        let manager = ActionRingManager::default();
+        let mut spec = spec();
+        spec.layout.set_action(Left, None);
+        spec.layout.add_folder(Left);
+        spec.layout.set_folder_flyout(Left, true);
+        spec.layout
+            .folder_mut(Left)
+            .unwrap()
+            .insert_compact_action(false, RingAction::new(Action::VolumeControls).unwrap());
+        let ring = manager.begin(spec);
+        let vertical = ScrollDelta::wheel_ticks(0.0, 1.0);
+        let horizontal = ScrollDelta::wheel_ticks(-1.5, 0.0);
+        assert!(!manager.try_scroll_slider(vertical));
+        manager.activate(ring.session_id, Left).unwrap();
+        assert!(!manager.try_scroll_slider(horizontal));
+        manager.activate(ring.session_id, Top).unwrap();
+
+        assert!(manager.try_scroll_slider(vertical));
+        assert!(manager.try_scroll_slider(horizontal));
+        assert!(manager.try_scroll_slider(ScrollDelta::pixels(20.0, 0.0)));
+        let updated = manager.observe(0).await.invocation.unwrap();
+        assert_eq!(updated.slider_scroll, 100);
+        assert_eq!(updated.flyout, Some(Left));
+        assert_eq!(
+            updated.slider.map(|slider| (slider.slot, slider.kind)),
+            Some((Top, SliderKind::Volume))
+        );
+
+        manager.activate(ring.session_id, Top).unwrap();
+        assert!(!manager.try_scroll_slider(vertical));
+        manager.cancel(ring.session_id);
+        assert!(!manager.try_scroll_slider(horizontal));
     }
 
     #[test]

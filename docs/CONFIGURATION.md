@@ -689,6 +689,9 @@ compact flyout, selected on its parent slot or by adding `flyout = true` next
 to `folder`. Use **Add Compact Flyout** and fill positions from either end of
 the arc. The actions center on the parent slot until the arc fills a
 twelve-action outer circle.
+On macOS, add **Volume Controls** from the action list to open a system output
+volume slider beside the ring or beyond the selected flyout action. Drag the
+slider or turn either mouse wheel while it is open.
 Use **Search actions** to filter the available shortcuts by name or category.
 
 Schema 12 adds ring folders and the optional `haptic_strength` setting.

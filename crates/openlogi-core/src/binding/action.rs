@@ -264,6 +264,8 @@ pub enum Action {
     EasySwitchChannel2,
     /// Move the device to its third Easy-Switch channel.
     EasySwitchChannel3,
+    /// Open the system output-volume slider from an Actions Ring slot.
+    VolumeControls,
 }
 
 /// Which of a held chord's keys stay down for the lifetime of the press.
@@ -372,6 +374,7 @@ macro_rules! for_each_unit_action {
             PlayPause "Play / Pause" "actions.play_pause" Media Play,
             NextTrack "Next Track" "actions.next_track" Media NextTrack,
             PrevTrack "Previous Track" "actions.previous_track" Media PreviousTrack,
+            VolumeControls "Volume Controls" "action_ring.volume_controls" Media Volume not_pickable,
             VolumeUp "Volume Up" "actions.volume_up" Media Volume,
             VolumeDown "Volume Down" "actions.volume_down" Media VolumeDown,
             MuteVolume "Mute" "actions.mute" Media Mute,

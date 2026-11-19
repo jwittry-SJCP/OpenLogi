@@ -750,6 +750,8 @@ keyboard_lighting_description = "Toegepast door OpenLogi zolang het draait, niet
 [action_ring]
 folder_creation = "Actions Ring Folder"
 add_folder = "Add Folder"
+volume_controls = "Volume Controls"
+volume_unavailable = "Volume unavailable"
 use_folder_icon = "Use Folder Icon"
 use_flyout_icon = "Use Flyout Icon"
 compact_flyout = "Compact Flyout"

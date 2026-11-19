@@ -353,6 +353,14 @@ impl InputDispatcher {
         increments: i16,
         resolution: WheelResolution,
     ) {
+        let ticks = f64::from(increments) * resolution.native_per_increment();
+        if self
+            .outputs
+            .ring
+            .try_scroll_slider(ScrollDelta::wheel_ticks(ticks, 0.0))
+        {
+            return;
+        }
         let Some(rotation) = WheelRotation::from_increments(increments) else {
             return;
         };

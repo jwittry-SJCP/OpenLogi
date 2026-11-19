@@ -486,7 +486,10 @@ fn matching_actions(query: &str) -> Vec<(Category, Vec<Action>)> {
 
 fn ring_catalog() -> Vec<(Category, Vec<Action>)> {
     let mut sections: Vec<(Category, Vec<Action>)> = Vec::new();
-    for action in Action::catalog() {
+    let sliders = [Action::VolumeControls]
+        .into_iter()
+        .filter(|action| openlogi_core::action_ring::SliderKind::for_action(action).is_some());
+    for action in Action::catalog().into_iter().chain(sliders) {
         if RingAction::new(action.clone()).is_err() {
             continue;
         }

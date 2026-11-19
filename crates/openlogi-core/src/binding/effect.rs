@@ -284,6 +284,7 @@ impl Action {
             | Action::EasySwitchChannel1
             | Action::EasySwitchChannel2
             | Action::EasySwitchChannel3
+            | Action::VolumeControls
             | Action::ShowActionsRing
             | Action::PreviousKeypadPage
             | Action::NextKeypadPage
