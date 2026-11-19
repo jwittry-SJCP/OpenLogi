@@ -32,6 +32,7 @@ pub(super) struct ProfileChoice {
 impl ProfileChoice {
     /// A not-yet-saved profile for an application keyed by its identifier.
     pub(super) fn application(app: String, name: String) -> Self {
+        let name = known_profile_name(&app).map_or(name, str::to_owned);
         Self {
             icon: app.clone(),
             app,
@@ -254,13 +255,13 @@ fn profile_choice(state: &AppState, key: &str, persisted: bool) -> ProfileChoice
     }
 }
 
-/// What the UI calls the profile keyed `key`: an alias's `name`, else the name
-/// the agent reported for an application the profile applies to, else the
-/// alias name, or for any other key a name derived from the identifier.
+/// A custom alias name takes precedence over the application's display name.
+/// If neither is available, fall back to the alias or profile identifier.
 pub(crate) fn profile_name(state: &AppState, key: &str) -> String {
     let alias = state.app_aliases().for_profile_key(key);
     alias
         .and_then(|(_, alias)| alias.display_name())
+        .or_else(|| known_profile_name(key))
         .or_else(|| state.recent_app_name(key))
         .map_or_else(
             || alias.map_or_else(|| friendly_app_name(key), |(name, _)| name.to_string()),
@@ -433,6 +434,15 @@ impl ProfileCommand {
                     true
                 })
         });
+    }
+}
+
+/// Product names for bundle IDs whose final component is an internal label.
+fn known_profile_name(identifier: &str) -> Option<&'static str> {
+    match identifier {
+        "us.zoom.xos" => Some("Zoom"),
+        "com.microsoft.teams" | "com.microsoft.teams2" => Some("Microsoft Teams"),
+        _ => None,
     }
 }
 
@@ -618,6 +628,23 @@ mod tests {
             );
             assert_eq!(profile_name(&state, "app:tool"), "Tool");
             assert_eq!(profile_name(&state, "exe:tool.exe"), "Tool");
+        }
+
+        #[test]
+        fn meeting_profiles_use_product_names_before_and_after_the_apps_are_seen() {
+            let ids = ["us.zoom.xos", "com.microsoft.teams2"];
+            let names = [
+                ("us.zoom.xos", "zoom.us"),
+                ("com.microsoft.teams2", "teams2"),
+            ];
+            for recent in [&[][..], &names[..]] {
+                let state = state_with("", &ids, recent);
+                assert_eq!(profile_name(&state, ids[0]), "Zoom");
+                assert_eq!(profile_name(&state, ids[1]), "Microsoft Teams");
+            }
+            let choice = super::super::ProfileChoice::application(ids[0].into(), "zoom.us".into());
+            assert_eq!(choice.name, "Zoom");
+            assert_eq!(choice.app, ids[0]);
         }
 
         #[test]
