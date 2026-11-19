@@ -679,7 +679,9 @@ and turning gestures back on restores the saved directions. The setting is per
 device, not per application: an app profile that gives the button its own
 action replaces the wheel hold in that application.
 
-An empty slot can be assigned a folder with a separate ring of shortcuts. Select a folder in the
+Drag a filled slot onto another slot in the Actions Ring editor to move it.
+Dropping onto an occupied slot swaps the two entries. An empty slot can be
+assigned a folder with a separate ring of shortcuts. Select a folder in the
 editor to change its icon or name. For a full folder, open its ring and use
 **Back to Parent Ring** to return.
 Selecting a folder in the on-screen ring opens its contents. A folder can use a

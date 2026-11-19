@@ -451,6 +451,19 @@ impl ActionRingLayout {
         }
     }
 
+    /// Move the complete entry to an empty destination or swap two entries.
+    pub fn move_slot(&mut self, from: ActionRingSlot, to: ActionRingSlot) {
+        if from == to {
+            return;
+        }
+        let Some(entry) = self.slots.remove(&from) else {
+            return;
+        };
+        if let Some(displaced) = self.slots.insert(to, entry) {
+            self.slots.insert(from, displaced);
+        }
+    }
+
     /// Set a custom icon for a populated slot. Empty slots remain empty.
     pub fn set_icon(&mut self, slot: ActionRingSlot, icon: Option<ActionRingIcon>) {
         match self.slots.get_mut(&slot) {
@@ -845,6 +858,39 @@ Bottom = { action = { CustomShortcut = "Cmd+Shift+P" } }
         assert_eq!(ring.slots.len(), COMPACT_SLOTS.len());
         let encoded = toml::to_string(&ring).unwrap();
         assert_eq!(toml::from_str::<ActionRingLayout>(&encoded).unwrap(), ring);
+    }
+
+    #[test]
+    fn move_and_swap_preserve_the_folder_and_shortcut_metadata() {
+        use ActionRingSlot::{Bottom, Left, Right, Top};
+        let mut layout = ActionRingLayout {
+            slots: BTreeMap::new(),
+        };
+        layout.add_folder(Top);
+        layout.set_label(Top, Some("Editing".into()));
+        layout
+            .folder_mut(Top)
+            .unwrap()
+            .set_action(Left, Some(RingAction::new(Action::Copy).unwrap()));
+        layout.set_action(Right, Some(RingAction::new(Action::Paste).unwrap()));
+        layout.set_icon(Right, Some(ActionRingIcon::Keyboard));
+        assert_eq!(layout.slots.len(), 2);
+        layout.move_slot(Top, Bottom);
+        assert!(!layout.slots.contains_key(&Top));
+        assert_eq!(layout.slots[&Bottom].custom_label(), Some("Editing"));
+        layout.move_slot(Bottom, Right);
+        assert_eq!(layout.slots[&Bottom].action(), Some(&Action::Paste));
+        assert_eq!(
+            layout.slots[&Bottom].custom_icon(),
+            Some(ActionRingIcon::Keyboard)
+        );
+        let inner = layout.slots[&Right].folder().unwrap();
+        assert_eq!(inner.slots[&Left].action(), Some(&Action::Copy));
+        let encoded = toml::to_string_pretty(&layout).unwrap();
+        assert_eq!(
+            toml::from_str::<ActionRingLayout>(&encoded).unwrap(),
+            layout
+        );
     }
 
     #[test]

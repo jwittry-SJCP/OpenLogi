@@ -180,6 +180,19 @@ impl AppState {
         })
     }
 
+    pub(crate) fn move_action_ring_slot(
+        &mut self,
+        from: ActionRingSlot,
+        to: ActionRingSlot,
+    ) -> StateEvents {
+        if from == to || !self.current_action_ring_layout().slots.contains_key(&from) {
+            return StateEvents::none();
+        }
+        self.edit_action_ring_layout("Actions Ring slot order", |layout| {
+            layout.move_slot(from, to);
+        })
+    }
+
     pub(crate) fn commit_haptic_strength(&mut self, strength: u8) -> StateEvents {
         let events = self.for_current_device(StateEvent::BindingsChanged);
         let Some(key) = self

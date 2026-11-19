@@ -457,6 +457,27 @@ impl SlotTarget {
     }
 }
 
+#[derive(Clone)]
+struct DraggedRingSlot {
+    target: SlotTarget,
+    label: SharedString,
+}
+
+impl Render for DraggedRingSlot {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let pal = theme::palette(cx);
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .border_1()
+            .border_color(pal.border)
+            .bg(pal.panel)
+            .text_color(pal.text_primary)
+            .child(self.label.clone())
+    }
+}
+
 fn action_ring_editor_state(cx: &Context<ActionRingPanel>) -> (ActionRingConfig, ActionRingLayout) {
     AppState::try_read(cx).map_or_else(
         || {
@@ -666,6 +687,7 @@ fn slot_button(
     let icon_path = entry.map(|entry| entry.icon().asset_path());
     let accessible_label = label.clone();
     let selected_view = view.clone();
+    let drop_view = view.clone();
 
     BaseButton::new((id, index))
         .debug_selector(move || {
@@ -702,6 +724,46 @@ fn slot_button(
         })
         .cursor_pointer()
         .accessibility_label(accessible_label)
+        .when(entry.is_some(), |button| {
+            button.on_drag(
+                DraggedRingSlot {
+                    target,
+                    label: label.clone().into(),
+                },
+                |dragged, _, _, cx| cx.new(|_| dragged.clone()),
+            )
+        })
+        .drag_over::<DraggedRingSlot>(|style, _, _, _| {
+            style.bg(theme::accent_tint()).border_color(theme::accent())
+        })
+        .on_drop(move |dragged: &DraggedRingSlot, _, cx| {
+            let from = dragged.target;
+            if from.folder != target.folder {
+                return;
+            }
+            AppState::apply(cx, |state| match target.folder {
+                Some(anchor) => state.edit_compact_ring(anchor, |layout| {
+                    if let Some((before, _)) = target.insertion {
+                        layout.move_compact_to_end(from.slot, before);
+                    } else {
+                        layout.move_slot(from.slot, slot);
+                    }
+                }),
+                None => state.move_action_ring_slot(from.slot, slot),
+            });
+            drop_view.update(cx, |panel, cx| {
+                let selection = if let (Some(anchor), Some((before, count))) =
+                    (target.folder, target.insertion)
+                {
+                    let index = if before { 0 } else { count.saturating_sub(1) };
+                    SlotTarget::child(anchor, COMPACT_SLOTS[index])
+                } else {
+                    target
+                };
+                selection.select(panel);
+                cx.notify();
+            });
+        })
         .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
         .when_some(icon_path, |button, path| {
             button.child(svg().path(path).size(px(20.0)).text_color(if selected {
