@@ -41,6 +41,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use dispatch2::DispatchQueue;
@@ -620,17 +622,83 @@ fn scan_cameras(runtime: &tokio::runtime::Handle) {
     });
 }
 
-fn open_url(url: &str) {
-    match opener::open(url) {
-        Ok(()) => info!(url, "menu-bar — opening URL"),
-        Err(e) => warn!(error = %e, url, "could not open URL from menu bar"),
+/// Use the outer app that shipped this agent. LaunchServices may register
+/// several copies for the shared URL scheme, including regular and Dev builds.
+struct TrayGui {
+    bundle: Option<PathBuf>,
+    bundle_id: String,
+}
+
+impl TrayGui {
+    fn current() -> Self {
+        let bundle = std::env::current_exe()
+            .ok()
+            .as_deref()
+            .and_then(tray_gui_bundle)
+            .map(Path::to_path_buf);
+        let bundle_id = if openlogi_core::paths::is_dev_profile() {
+            brand::dev_id(brand::APP_ID)
+        } else {
+            brand::APP_ID.to_owned()
+        };
+        Self { bundle, bundle_id }
+    }
+
+    fn open(&self, command: &DeeplinkCommand) {
+        let mut open = Command::new("/usr/bin/open");
+        if let Some(bundle) = &self.bundle {
+            open.arg("-a").arg(bundle);
+        } else {
+            open.arg("-b").arg(&self.bundle_id);
+        }
+        match open.arg(command.to_url()).output() {
+            Ok(output) if output.status.success() => {
+                info!(?command, "menu-bar — sent command to OpenLogi");
+            }
+            Ok(output) => warn!(
+                ?command, status = %output.status,
+                message = %String::from_utf8_lossy(&output.stderr).trim(),
+                "could not send menu-bar command"
+            ),
+            Err(error) => warn!(?command, %error, "could not send menu-bar command"),
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        let running = NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(&self.bundle_id),
+        );
+        let Some(bundle) = &self.bundle else {
+            return !running.is_empty();
+        };
+        let Ok(bundle) = bundle.canonicalize() else {
+            return false;
+        };
+        running.iter().any(|app| {
+            app.bundleURL()
+                .and_then(|url| url.path())
+                .and_then(|path| Path::new(&path.to_string()).canonicalize().ok())
+                .is_some_and(|path| path == bundle)
+        })
     }
 }
 
-/// Route a GUI-directed [`DeeplinkCommand`] through the `openlogi://` scheme.
-/// macOS launches the GUI (cold start) or hands the URL to the running app.
+fn tray_gui_bundle(executable: &Path) -> Option<&Path> {
+    let helper = brand::helper_bundle_root(executable)?;
+    let outer = helper.ancestors().nth(4)?;
+    if outer.extension()? != "app" {
+        return None;
+    }
+    let relative = executable.strip_prefix(outer).ok()?;
+    brand::Helper::Agent
+        .executable_candidates()
+        .iter()
+        .any(|candidate| relative == Path::new(candidate))
+        .then_some(outer)
+}
+
 fn open_command(command: &DeeplinkCommand) {
-    open_url(&command.to_url());
+    TrayGui::current().open(command);
 }
 
 /// Show the directory the agent's logs are written to in Finder.
@@ -656,28 +724,14 @@ fn quit_agent() -> ! {
     // warm in the common case, so the blocking `.output()` (which guarantees
     // Apple-Event delivery) returns at once; a GUI that races to exit after the
     // check was quitting anyway.
-    if gui_is_running() {
-        let _ = std::process::Command::new("open")
-            .arg(DeeplinkCommand::Quit.to_url())
-            .output();
+    let gui = TrayGui::current();
+    if gui.is_running() {
+        gui.open(&DeeplinkCommand::Quit);
     }
     crate::overlay::evict_on_quit();
     info!("menu-bar Quit — requesting graceful agent shutdown");
     let requests = SHUTDOWN_TX.with_borrow(Clone::clone);
     shutdown::request_tray_quit(requests.as_ref(), 0)
-}
-
-/// Whether an OpenLogi GUI process is currently running (prod or dev bundle).
-/// Used to avoid cold-launching the GUI from the Quit handler just to quit it.
-fn gui_is_running() -> bool {
-    // Release and dev; the agent's own id is `brand::AGENT_ID`, so neither
-    // matches the agent itself.
-    let dev = brand::dev_id(brand::APP_ID);
-    [brand::APP_ID, dev.as_str()].iter().any(|id| {
-        let running =
-            NSRunningApplication::runningApplicationsWithBundleIdentifier(&NSString::from_str(id));
-        !running.is_empty()
-    })
 }
 
 /// Run the agent's AppKit main loop: an `Accessory` `NSApplication` (no Dock
@@ -1237,5 +1291,22 @@ mod tests {
 
         // SAFETY: This is the same live target registered with `center` above.
         unsafe { center.removeObserver(&target) };
+    }
+}
+
+#[cfg(test)]
+mod tray_routing_tests {
+    use super::*;
+
+    #[test]
+    fn tray_commands_target_the_agent_owning_bundle() {
+        let path = Path::new(
+            "/tmp/OpenLogi Dev.app/Contents/Library/LoginItems/OpenLogi Agent Dev.app/Contents/MacOS/openlogi-agent",
+        );
+        assert_eq!(
+            tray_gui_bundle(path),
+            Some(Path::new("/tmp/OpenLogi Dev.app"))
+        );
+        assert_eq!(tray_gui_bundle(Path::new("/tmp/openlogi-agent")), None);
     }
 }
