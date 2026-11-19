@@ -99,6 +99,7 @@ pub(crate) fn action_icon_path(action: &Action) -> &'static str {
         Action::PlayPause => "action-icons/play.svg",
         Action::NextTrack => "action-icons/skip-forward.svg",
         Action::PrevTrack => "action-icons/skip-back.svg",
+        Action::DisplayBrightness => "action-icons/monitor.svg",
         Action::VolumeUp | Action::VolumeControls => "action-icons/volume-2.svg",
         Action::VolumeDown => "action-icons/volume-1.svg",
         Action::MuteVolume => "action-icons/volume-x.svg",

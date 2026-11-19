@@ -17,6 +17,7 @@
 rust_i18n::i18n!("../openlogi-ui/locales", fallback = "en");
 
 mod backlight;
+mod display_brightness;
 mod ipc;
 mod lock_key;
 mod notice;

@@ -266,6 +266,8 @@ pub enum Action {
     EasySwitchChannel3,
     /// Open the system output-volume slider from an Actions Ring slot.
     VolumeControls,
+    /// Open a brightness slider for the display containing the Actions Ring.
+    DisplayBrightness,
 }
 
 /// Which of a held chord's keys stay down for the lifetime of the press.
@@ -374,6 +376,7 @@ macro_rules! for_each_unit_action {
             PlayPause "Play / Pause" "actions.play_pause" Media Play,
             NextTrack "Next Track" "actions.next_track" Media NextTrack,
             PrevTrack "Previous Track" "actions.previous_track" Media PreviousTrack,
+            DisplayBrightness "Display Brightness" "action_ring.display_brightness" System Monitor not_pickable,
             VolumeControls "Volume Controls" "action_ring.volume_controls" Media Volume not_pickable,
             VolumeUp "Volume Up" "actions.volume_up" Media Volume,
             VolumeDown "Volume Down" "actions.volume_down" Media VolumeDown,

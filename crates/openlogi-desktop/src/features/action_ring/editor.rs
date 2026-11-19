@@ -486,7 +486,7 @@ fn matching_actions(query: &str) -> Vec<(Category, Vec<Action>)> {
 
 fn ring_catalog() -> Vec<(Category, Vec<Action>)> {
     let mut sections: Vec<(Category, Vec<Action>)> = Vec::new();
-    let sliders = [Action::VolumeControls]
+    let sliders = [Action::VolumeControls, Action::DisplayBrightness]
         .into_iter()
         .filter(|action| openlogi_core::action_ring::SliderKind::for_action(action).is_some());
     for action in Action::catalog().into_iter().chain(sliders) {

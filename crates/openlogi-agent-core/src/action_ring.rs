@@ -821,6 +821,43 @@ mod tests {
         assert!(!manager.try_scroll_slider(horizontal));
     }
 
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn brightness_uses_the_slider_wheel_path_and_retains_the_folder_icon() {
+        use ActionRingSlot::{Left, Top};
+
+        let manager = ActionRingManager::default();
+        let mut spec = spec();
+        spec.layout.set_action(Left, None);
+        spec.layout.add_folder(Left);
+        spec.layout.set_folder_flyout(Left, true);
+        spec.layout.set_icon(Left, Some(ActionRingIcon::Star));
+        spec.layout
+            .folder_mut(Left)
+            .unwrap()
+            .insert_compact_action(false, RingAction::new(Action::DisplayBrightness).unwrap());
+
+        let root = manager.begin(spec);
+        assert_eq!(root.slots[&Left].icon, ActionRingIcon::Star);
+        manager.activate(root.session_id, Left).unwrap();
+        manager.activate(root.session_id, Top).unwrap();
+        assert!(manager.try_scroll_slider(ScrollDelta::wheel_ticks(0.0, 1.0)));
+        assert!(manager.try_scroll_slider(ScrollDelta::wheel_ticks(1.0, 0.0)));
+        let page = manager.observe(0).await.invocation.unwrap();
+        let slider = page.slider.unwrap();
+        assert_eq!(
+            (slider.slot, slider.kind),
+            (Top, SliderKind::DisplayBrightness)
+        );
+        assert_eq!(slider.scroll_origin, 0);
+        assert_eq!(page.slider_scroll, 400);
+        manager.activate(root.session_id, Top).unwrap();
+        manager.activate(root.session_id, Top).unwrap();
+        let reopened = manager.observe(0).await.invocation.unwrap();
+        assert_eq!(reopened.slider.unwrap().scroll_origin, 400);
+        assert_eq!(page.parent_slots[&Left].icon, ActionRingIcon::Star);
+    }
+
     #[test]
     fn repeated_hover_is_deduplicated() {
         let manager = ActionRingManager::default();

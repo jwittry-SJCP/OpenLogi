@@ -24,6 +24,8 @@ pub const DISPLAY_LIFETIME: Duration = Duration::from_secs(15);
 pub enum SliderKind {
     /// Default audio output level.
     Volume,
+    /// Brightness of the display that hosts the ring.
+    DisplayBrightness,
 }
 
 impl SliderKind {
@@ -35,6 +37,7 @@ impl SliderKind {
         }
         match action {
             Action::VolumeControls => Some(Self::Volume),
+            Action::DisplayBrightness => Some(Self::DisplayBrightness),
             _ => None,
         }
     }

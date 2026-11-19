@@ -194,7 +194,7 @@ pub use succession::Identity;
 ///      and `ActionRingIcon::{Channel1, Channel2, Channel3}` appended after
 ///      them — a device's move to another Easy-Switch channel, bound to a
 ///      button or an Actions Ring slot.
-/// v47: Actions Ring folders and compact flyouts, parent slots, system sliders with wheel input, extra outer slots, and the compact flyout icon.
+/// v47: Actions Ring folders and compact flyouts, parent slots, volume and display brightness sliders with wheel input, extra outer slots, and the compact flyout icon.
 pub const PROTOCOL_VERSION: u32 = 47;
 
 /// Environment variable through which the agent hands a supervised helper the

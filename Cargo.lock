@@ -6352,6 +6352,7 @@ dependencies = [
  "embed-resource",
  "gpui-pre",
  "gpui-pre-platform",
+ "libloading",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "openlogi-core",

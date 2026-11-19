@@ -21,6 +21,7 @@ use openlogi_ui::color::{self, neutral};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::display_brightness::DisplayBrightness;
 use crate::ipc::OverlayCommand;
 use crate::output_volume::OutputVolume;
 use crate::session::{self, ClickAwaySession, ShowingRing};
@@ -527,20 +528,29 @@ impl RingPointer {
 
 enum ActiveSlider {
     Volume(OutputVolume),
+    Brightness(DisplayBrightness),
 }
 
 impl ActiveSlider {
-    fn open(slider: Option<ActionRingSlider>, _window: &Window, _cx: &gpui::App) -> Option<Self> {
+    fn open(slider: Option<ActionRingSlider>, window: &Window, cx: &gpui::App) -> Option<Self> {
         match slider?.kind {
             SliderKind::Volume => OutputVolume::read().map(Self::Volume),
+            SliderKind::DisplayBrightness => {
+                DisplayBrightness::read(slider_display(window, cx)?).map(Self::Brightness)
+            }
         }
     }
 
     fn fraction(&self) -> f32 {
         match self {
             Self::Volume(level) => level.fraction,
+            Self::Brightness(level) => level.fraction,
         }
     }
+}
+
+fn slider_display(window: &Window, cx: &gpui::App) -> Option<u32> {
+    u32::try_from(u64::from(window.display(cx)?.id())).ok()
 }
 
 pub(crate) struct RingView {
@@ -694,6 +704,7 @@ impl RingView {
             }
             let written = match slider {
                 ActiveSlider::Volume(level) => level.write(fraction),
+                ActiveSlider::Brightness(level) => level.write(fraction),
             };
             if !written {
                 self.slider = None;
@@ -859,10 +870,15 @@ impl RingView {
                             )
                         })
                         .when(fraction.is_none(), |track| {
-                            track
-                                .text_color(colors.glyph)
-                                .text_size(px(11.0))
-                                .child(rust_i18n::t!("action_ring.volume_unavailable").into_owned())
+                            track.text_color(colors.glyph).text_size(px(11.0)).child(
+                                match self.invocation.slider.map(|slider| slider.kind) {
+                                    Some(SliderKind::DisplayBrightness) => {
+                                        rust_i18n::t!("action_ring.brightness_unavailable")
+                                    }
+                                    _ => rust_i18n::t!("action_ring.volume_unavailable"),
+                                }
+                                .into_owned(),
+                            )
                         }),
                 )
             })

@@ -565,12 +565,16 @@ fn action_ring_types() {
     );
     assert_wire(&openlogi_core::action_ring::SliderKind::Volume, "00");
     assert_wire(
+        &openlogi_core::action_ring::SliderKind::DisplayBrightness,
+        "01",
+    );
+    assert_wire(
         &openlogi_ipc::ActionRingSlider {
             slot: ActionRingSlot::TopRight,
-            kind: openlogi_core::action_ring::SliderKind::Volume,
+            kind: openlogi_core::action_ring::SliderKind::DisplayBrightness,
             scroll_origin: 7,
         },
-        "01000e",
+        "01010e",
     );
     // The literal flag is one byte between label and icon.
     assert_wire(

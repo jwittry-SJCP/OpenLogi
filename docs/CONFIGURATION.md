@@ -691,7 +691,9 @@ the arc. The actions center on the parent slot until the arc fills a
 twelve-action outer circle.
 On macOS, add **Volume Controls** from the action list to open a system output
 volume slider beside the ring or beyond the selected flyout action. Drag the
-slider or turn either mouse wheel while it is open.
+slider or turn either mouse wheel while it is open. **Display Brightness**
+uses the same controls on the Mac’s built-in display. The slider shows
+**Brightness unavailable** when the ring opens on an external monitor.
 Use **Search actions** to filter the available shortcuts by name or category.
 
 Schema 12 adds ring folders and the optional `haptic_strength` setting.
@@ -700,7 +702,7 @@ Existing layouts load unchanged. Set `haptic_strength` under a device's
 choices are Off, Subtle, Low, Medium, and High. Saved slider values map to the
 closest level. Schema 13 adds the optional folder flyout setting. Schema 14 adds the four
 extra positions used by a full outer circle. Schema 15 adds custom folder
-icons.
+icons and the Display Brightness action.
 
 An Actions Ring entry wraps the action and may add an icon or literal label:
 

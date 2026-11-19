@@ -69,7 +69,7 @@ use crate::binding::{Binding, ButtonId, GestureDirection};
 /// persisted shape or enum vocabulary changes; readers inspect this value
 /// before consuming the rest of the file.
 ///
-/// v15 adds custom folder icons.
+/// v15 adds display brightness actions and custom folder icons.
 ///
 /// v14 adds four outer-circle positions to compact Actions Ring folders.
 ///
