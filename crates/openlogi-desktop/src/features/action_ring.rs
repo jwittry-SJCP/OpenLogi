@@ -14,7 +14,7 @@ use gpui_kit::component::{
     Icon, IconName, Selectable as _,
     button::{Button, ButtonGroup},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     tooltip::Tooltip,
     v_flex,
 };
@@ -45,6 +45,7 @@ pub struct ActionRingPanel {
     shell_command_input: Option<Entity<InputState>>,
     library_scroll: ScrollHandle,
     folder_name: Option<Entity<InputState>>,
+    action_search: Option<Entity<InputState>>,
     #[expect(dead_code, reason = "held to keep the AppState subscription alive")]
     state_obs: Subscription,
 }
@@ -65,8 +66,28 @@ impl ActionRingPanel {
             shell_command_input: None,
             library_scroll: ScrollHandle::new(),
             folder_name: None,
+            action_search: None,
             state_obs,
         }
+    }
+
+    fn search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<InputState> {
+        let first_render = self.action_search.is_none();
+        let input = editor_input(
+            &mut self.action_search,
+            tr!("actions.search_actions"),
+            window,
+            cx,
+        );
+        if first_render {
+            cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
+        input
     }
 
     /// Get-or-create the three Power User text inputs, split out of `render`
@@ -231,8 +252,11 @@ impl Render for ActionRingPanel {
                     )
                     .when_some(folder_editor, ParentElement::child)
                     .when_some(library_target, |row, target| {
+                        let search = self.search_input(window, cx);
+                        let query = search.read(cx).value();
                         row.child(action_library(
                             target,
+                            Some((&search, query.as_ref())),
                             !in_folder,
                             &application_input,
                             &shortcut_input,

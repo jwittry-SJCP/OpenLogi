@@ -171,7 +171,9 @@ fn dragging_an_actions_ring_slot_moves_then_swaps(cx: &mut gpui::TestAppContext)
     visual.simulate_mouse_up(empty, gpui::MouseButton::Left, gpui::Modifiers::none());
     visual.update(|window, cx| window.draw(cx).clear(cx));
     let library = visual.debug_bounds("ring-slot-editor").unwrap();
+    let search = visual.debug_bounds("ring-action-search").unwrap();
     let add_folders = visual.debug_bounds("ring-folder-create-actions").unwrap();
+    assert!(add_folders.top() >= search.bottom());
     assert!(add_folders.bottom() <= library.bottom());
 
     drag(visual, "action-ring-slot-Top", "action-ring-slot-Left");
