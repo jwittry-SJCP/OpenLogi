@@ -100,6 +100,8 @@ Forward = "NextTab"
 [devices."receiver:aabbccdd:slot:1".action_ring]
 enabled = true
 haptics = true
+# Set this device’s haptic strength. Omit to leave it under device control.
+# haptic_strength = 60
 
 [devices."receiver:aabbccdd:slot:1".action_ring.default.slots]
 Top = { action = "Copy", icon = "Keyboard" }

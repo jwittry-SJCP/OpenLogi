@@ -198,6 +198,7 @@ pub struct SharedHandles {
     pointer_speeds: Arc<PointerSpeeds>,
     /// Orders every path's press-force writes per force-sensing device.
     force_sensing_order: WriteOrder,
+    haptic_strength_order: WriteOrder,
     /// Orders the GUI's sidetone writes per headset.
     sidetone_order: WriteOrder,
     /// Orders the GUI's backlight writes per keyboard.
@@ -921,6 +922,7 @@ impl Orchestrator {
             report_rate_order: WriteOrder::default(),
             pointer_speeds: Arc::default(),
             force_sensing_order: WriteOrder::default(),
+            haptic_strength_order: WriteOrder::default(),
             sidetone_order: WriteOrder::default(),
             backlight_order: WriteOrder::default(),
             host_name_order: WriteOrder::default(),
@@ -1978,6 +1980,9 @@ impl Orchestrator {
         if let Some(force) = configured_force_sensing(&self.config, dev) {
             self.shared.write_force_sensing_in_background(&route, force);
         }
+        if let Some(strength) = devices::configured_haptic_strength(&self.config, dev) {
+            self.write_haptic_strength(&route, strength, false);
+        }
         if let Some(write) = speed_write {
             self.write_pointer_speed(write);
         }
@@ -2187,6 +2192,9 @@ impl Orchestrator {
         }
         let haptic_route = (device.online
             && ring.haptics
+            && ring
+                .haptic_strength
+                .is_none_or(|strength| u8::from(strength.nearest_level()) > 0)
             && device
                 .capabilities
                 .is_some_and(|capabilities| capabilities.haptic_feedback))
@@ -2406,6 +2414,20 @@ impl Orchestrator {
         self.apply_changed_fn_locks(&previous);
         self.apply_changed_force_sensing(&previous);
         for dev in &self.devices {
+            if dev.online
+                && self.config.device_enabled(&dev.config_key)
+                && let Some(route) = &dev.route
+                && let Some(strength) = devices::configured_haptic_strength(&self.config, dev)
+                && Some(strength) != devices::configured_haptic_strength(&previous, dev)
+            {
+                self.write_haptic_strength(
+                    route,
+                    strength,
+                    self.config.action_ring(&dev.config_key).haptics,
+                );
+            }
+        }
+        for dev in &self.devices {
             let was_enabled = dev
                 .resolve_config_key(&previous)
                 .is_some_and(|key| previous.device_enabled(key.as_str()));
@@ -2492,6 +2514,20 @@ impl Orchestrator {
         for (route, force) in changed_force_sensing(previous, &self.config, &self.devices) {
             self.shared.write_force_sensing_in_background(&route, force);
         }
+    }
+
+    fn write_haptic_strength(
+        &self,
+        route: &DeviceRoute,
+        strength: openlogi_core::binding::HapticStrength,
+        preview: bool,
+    ) {
+        crate::hardware::write_haptic_strength_in_background(
+            self.shared.device(route),
+            self.shared.haptic_strength_order.request(route),
+            strength,
+            preview,
+        );
     }
 
     /// End precision mode on every mouse whose speed, DPI or button

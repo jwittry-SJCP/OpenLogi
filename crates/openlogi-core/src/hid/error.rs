@@ -365,6 +365,8 @@ pub enum HidppOperation {
     /// Write the `0x8300` sidetone level. Appended last — variant order is
     /// wire format.
     WriteSidetone,
+    /// Write the device-wide HID++ 0x19b0 haptic strength.
+    WriteHapticStrength,
 }
 
 /// HID++ feature error kind in a serializable wire-safe form.

@@ -7,8 +7,8 @@ use hidpp::{
     feature::{
         CreatableFeature,
         haptic_feedback::{
-            HapticConfigFlags, HapticConfiguration, HapticFeedbackFeature, HapticStatus,
-            HapticWaveform, SupportedWaveforms,
+            HapticConfigFlags, HapticConfiguration, HapticFeedbackFeature, HapticIntensity,
+            HapticStatus, HapticWaveform, SupportedWaveforms,
         },
     },
 };
@@ -83,6 +83,52 @@ async fn resolve_feature(
         device.add_feature::<HapticFeedbackFeature>(info.index),
         info.index,
     ))
+}
+
+/// Apply the strength and enable flag while preserving the other firmware flags.
+pub async fn set_haptic_strength_on(
+    shared: &SharedChannel,
+    strength: openlogi_core::binding::HapticStrength,
+) -> Result<u8, WriteError> {
+    let mut device = open_device(shared.channel(), shared.device_index()).await?;
+    let (feature, _) = resolve_feature(&mut device).await?;
+    let classify = |error| {
+        classify_hidpp_error(
+            error,
+            HidppOperation::WriteHapticStrength,
+            HapticFeedbackFeature::ID,
+        )
+    };
+    let current = feature.get_configuration().await.map_err(classify)?;
+    let strength = u8::from(strength.nearest_level());
+    let mut flags = current.flags;
+    flags.set(HapticConfigFlags::ENABLED, strength > 0);
+    let intensity = if strength == 0 {
+        current.intensity
+    } else {
+        HapticIntensity::new(strength).ok_or(WriteError::UnsupportedResponse {
+            operation: HidppOperation::WriteHapticStrength,
+            feature_hex: HapticFeedbackFeature::ID,
+        })?
+    };
+    if current.intensity == intensity && current.flags == flags {
+        return Ok(strength);
+    }
+    let applied = feature
+        .set_configuration(flags, intensity)
+        .await
+        .map_err(classify)?;
+    let readback = feature.get_configuration().await.map_err(classify)?;
+    if [applied, readback].iter().any(|config| {
+        config.flags.contains(HapticConfigFlags::ENABLED) != (strength > 0)
+            || (strength > 0 && config.intensity != intensity)
+    }) {
+        return Err(WriteError::UnsupportedResponse {
+            operation: HidppOperation::WriteHapticStrength,
+            feature_hex: HapticFeedbackFeature::ID,
+        });
+    }
+    Ok(strength)
 }
 
 /// Resolve the haptic feature on `channel`, read which waveforms it
@@ -666,6 +712,24 @@ mod tests {
         let (result, writes, _) = arm_with(initial, |_| {}).await;
         let repaired = result.expect("the scripted device answers every haptic call");
         (repaired.is_some(), writes)
+    }
+
+    #[tokio::test]
+    async fn setting_strength_snaps_old_values_enables_feedback_and_preserves_other_flags() {
+        let (raw, handle) = stateful_haptics([0x82, 60, 0x34], |_| {}, RING_WAVEFORMS);
+        let shared = shared_channel(raw).await;
+        let strength = openlogi_core::binding::HapticStrength::try_new(43).unwrap();
+        assert_eq!(set_haptic_strength_on(&shared, strength).await.unwrap(), 45);
+        assert_eq!(config_writes(&handle), vec![[0x83, 45, 0]]);
+    }
+
+    #[tokio::test]
+    async fn turning_feedback_off_clears_enable_without_writing_another_intensity() {
+        let (raw, handle) = stateful_haptics([0x83, 60, 0x34], |_| {}, RING_WAVEFORMS);
+        let shared = shared_channel(raw).await;
+        let off = openlogi_core::binding::HapticStrength::try_new(0).unwrap();
+        assert_eq!(set_haptic_strength_on(&shared, off).await.unwrap(), 0);
+        assert_eq!(config_writes(&handle), vec![[0x82, 60, 0]]);
     }
 
     #[tokio::test]

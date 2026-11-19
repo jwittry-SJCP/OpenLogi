@@ -842,6 +842,47 @@ pub(crate) fn write_fn_lock_in_background(op: DeviceOp, ticket: WriteTicket, on:
     );
 }
 
+pub(crate) fn write_haptic_strength_in_background(
+    op: DeviceOp,
+    ticket: WriteTicket,
+    strength: openlogi_core::binding::HapticStrength,
+    preview: bool,
+) {
+    let index = op.route.device_index();
+    let turn = op.access.transport_turns.turn_for(&op.route);
+    op.spawn_timed_write(
+        "haptic strength write",
+        move |op| async move {
+            within_turn(
+                &ticket,
+                &turn,
+                || async {
+                    let shared = op.resolve()?;
+                    let applied = openlogi_hid::set_haptic_strength_on(&shared, strength).await?;
+                    info!(index, applied, "mouse confirmed haptic preset");
+                    if preview && applied > 0 {
+                        // Match the ring's confirmation pulse for every preset.
+                        if let Err(error) = openlogi_hid::play_haptic_on(
+                            &shared,
+                            openlogi_hid::HapticWaveform::DampStateChange,
+                        )
+                        .await
+                        {
+                            warn!(index, %error, "haptic preset preview failed");
+                        }
+                    }
+                    Ok(Some(applied))
+                },
+                || async { Ok(None) },
+            )
+            .await
+        },
+        move |result| {
+            log_outcome(index, "haptic strength write", result, |_| {});
+        },
+    );
+}
+
 /// Spawn an OS thread that writes the press force of `op`'s force-sensing
 /// button via [`openlogi_hid::set_force_sensing_on`], unless a newer
 /// press-force write for the device was requested after `ticket`. Returns

@@ -21,6 +21,7 @@ use gpui_kit::component::{
 use openlogi_core::action_ring::{COMPACT_SLOTS, compact_slot_centre};
 use openlogi_core::binding::{
     ActionRingConfig, ActionRingEntry, ActionRingLayout, ActionRingSize, ActionRingSlot,
+    HapticStrength,
 };
 use openlogi_ui::action_icons::RING_CANCEL_ICON;
 
@@ -272,18 +273,56 @@ fn ring_settings(
             size_segment(ring.size, cx),
         ))
         .when(haptics_supported, |panel| {
-            panel.child(toggle_row(
-                "ring-haptics-row",
-                pal,
-                tr!("action_ring.haptic_feedback"),
-                tr!("action_ring.action_ring_haptic_description"),
-                Toggle::new("ring-haptics-toggle")
-                    .selected(ring.haptics)
-                    .on_change(|haptics, _, cx| {
-                        AppState::apply(cx, |state| state.commit_action_ring_haptics(*haptics));
-                    }),
-            ))
+            panel
+                .child(toggle_row(
+                    "ring-haptics-row",
+                    pal,
+                    tr!("action_ring.haptic_feedback"),
+                    tr!("action_ring.action_ring_haptic_description"),
+                    Toggle::new("ring-haptics-toggle")
+                        .selected(ring.haptics)
+                        .on_change(|haptics, _, cx| {
+                            AppState::apply(cx, |state| state.commit_action_ring_haptics(*haptics));
+                        }),
+                ))
+                .child(stacked_row(
+                    "ring-haptic-strength-row",
+                    pal,
+                    tr!("action_ring.haptic_strength"),
+                    if ring.haptic_strength.is_none() {
+                        tr!("action_ring.device_strength")
+                    } else {
+                        tr!("action_ring.haptic_strength_description")
+                    },
+                    strength_segment(ring.haptic_strength.map(HapticStrength::nearest_level), cx),
+                ))
         })
+}
+
+fn strength_segment(current: Option<HapticStrength>, cx: &App) -> ButtonGroup {
+    let labels = [
+        tr!("action_ring.haptic_off"),
+        tr!("action_ring.haptic_subtle"),
+        tr!("action_ring.haptic_low"),
+        tr!("action_ring.haptic_medium"),
+        tr!("action_ring.haptic_high"),
+    ];
+    ButtonGroup::new("ring-strength").outline().children(
+        HapticStrength::LEVELS
+            .into_iter()
+            .zip(labels)
+            .enumerate()
+            .map(|(index, (strength, label))| {
+                let selected = current.map(u8::from) == Some(strength);
+                Button::new(("ring-strength", index))
+                    .label(label)
+                    .selected(selected)
+                    .selected_segment(selected, cx)
+                    .on_click(move |_, _, cx| {
+                        AppState::apply(cx, |state| state.commit_haptic_strength(strength));
+                    })
+            }),
+    )
 }
 
 fn navigate_folder(view: &Entity<ActionRingPanel>, slot: Option<ActionRingSlot>, cx: &mut App) {

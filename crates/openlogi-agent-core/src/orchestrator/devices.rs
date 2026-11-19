@@ -114,6 +114,21 @@ pub(super) fn configured_report_rate(config: &Config, dev: &AgentDevice) -> Opti
         .flatten()
 }
 
+pub(super) fn configured_haptic_strength(
+    config: &Config,
+    dev: &AgentDevice,
+) -> Option<openlogi_core::binding::HapticStrength> {
+    if dev.capabilities.is_some_and(|caps| caps.haptic_feedback) {
+        config
+            .devices
+            .get(&dev.config_key)?
+            .action_ring
+            .haptic_strength
+    } else {
+        None
+    }
+}
+
 /// The saved press force to push to `dev`: only when the user saved one and
 /// the probe found a force-sensing button whose force software may change,
 /// so nothing is written to a device the user never set a force for.

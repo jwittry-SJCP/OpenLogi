@@ -525,6 +525,29 @@ impl ActionRingSize {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
 }
 
+/// Device-wide haptic strength in whole percent.
+#[nutype(
+    validate(less_or_equal = 100),
+    derive(Clone, Copy, Debug, PartialEq, Eq, Into, Serialize, Deserialize)
+)]
+pub struct HapticStrength(u8);
+
+impl HapticStrength {
+    /// Intensity levels offered for the MX Master 4, including off.
+    pub const LEVELS: [u8; 5] = [0, 15, 45, 60, 100];
+
+    /// Resolve older slider values to the nearest supported intensity.
+    #[must_use]
+    pub fn nearest_level(self) -> Self {
+        let requested = u8::from(self);
+        Self::LEVELS
+            .into_iter()
+            .min_by_key(|level| level.abs_diff(requested))
+            .and_then(|level| Self::try_new(level).ok())
+            .unwrap_or(self)
+    }
+}
+
 /// Per-device Actions Ring settings and application-specific layouts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -535,6 +558,9 @@ pub struct ActionRingConfig {
     /// Whether ring hover and activation transitions play device haptics.
     #[serde(default = "default_true")]
     pub haptics: bool,
+    /// Optional device-wide strength. An untouched device keeps its own setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haptic_strength: Option<HapticStrength>,
     /// How large the ring is drawn.
     #[serde(default)]
     pub size: ActionRingSize,
@@ -551,6 +577,7 @@ impl Default for ActionRingConfig {
         Self {
             enabled: true,
             haptics: true,
+            haptic_strength: None,
             size: ActionRingSize::default(),
             default: ActionRingLayout::default(),
             per_app: BTreeMap::new(),

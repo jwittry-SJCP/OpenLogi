@@ -688,7 +688,11 @@ to `folder`. Use **Add Compact Flyout** and fill positions from either end of
 the arc. The actions center on the parent slot until the arc fills a
 twelve-action outer circle.
 
-Schema 12 adds ring folders. Existing layouts load unchanged. Schema 13 adds the optional folder flyout setting. Schema 14 adds the four
+Schema 12 adds ring folders and the optional `haptic_strength` setting.
+Existing layouts load unchanged. Set `haptic_strength` under a device's
+`action_ring` table to set device-wide haptic strength. On MX Master 4 the
+choices are Off, Subtle, Low, Medium, and High. Saved slider values map to the
+closest level. Schema 13 adds the optional folder flyout setting. Schema 14 adds the four
 extra positions used by a full outer circle. Schema 15 adds custom folder
 icons.
 

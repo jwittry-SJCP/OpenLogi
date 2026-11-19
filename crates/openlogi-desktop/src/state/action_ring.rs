@@ -180,6 +180,27 @@ impl AppState {
         })
     }
 
+    pub(crate) fn commit_haptic_strength(&mut self, strength: u8) -> StateEvents {
+        let events = self.for_current_device(StateEvent::BindingsChanged);
+        let Some(key) = self
+            .current_record()
+            .and_then(DeviceRecord::persistent_config_key)
+            .map(str::to_owned)
+        else {
+            return events;
+        };
+        self.config.edit(|config| {
+            config
+                .devices
+                .entry(key)
+                .or_default()
+                .action_ring
+                .haptic_strength = openlogi_core::binding::HapticStrength::try_new(strength).ok();
+        });
+        self.persist_and_reload("Haptic feedback strength");
+        events
+    }
+
     /// Replace or clear one slot in the open Actions Ring layout.
     pub fn commit_action_ring_slot(
         &mut self,
